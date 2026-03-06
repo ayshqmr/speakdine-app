@@ -45,68 +45,89 @@ class AuthService {
   }
 
   // --- Sign In ---
-  Future<String?> signInWithEmail({
+  Future<Map<String, dynamic>> signInWithEmail({
     required String emailOrUsername,
     required String password,
-    required String userType, // 'customer' or 'restaurant'
+    String? userType, // Optional now: If null, we detect it
   }) async {
     // --- SPECIAL TEST CREDENTIALS HANDLING ---
-    // Bypass Firebase for these specific credentials to allow offline/local testing
-    if ((emailOrUsername == 'kfc' || emailOrUsername == 'kfc@gmail.com') && password == '12345678' && userType == 'restaurant') {
-      return null; // Instant success
+    if ((emailOrUsername == 'kfc' || emailOrUsername == 'kfc@gmail.com') && password == '12345678') {
+      return {'type': 'restaurant'}; 
     }
-    if ((emailOrUsername == 'ayesha' || emailOrUsername == 'aq.ashooo@gmail.com') && password == '87654321' && userType == 'customer') {
-      return null; // Instant success
+    if ((emailOrUsername == 'ayesha' || emailOrUsername == 'aq.ashooo@gmail.com') && password == '87654321') {
+      return {'type': 'customer'};
     }
 
-    await _ensureTestUsers(emailOrUsername, password, userType);
-    
     try {
       String email = emailOrUsername;
+      String? foundType = userType;
       
       if (!emailOrUsername.contains('@')) {
-        final collection = userType == 'customer' ? 'customers' : 'restaurants';
-        final querySnapshot = await _firestore
-            .collection(collection)
-            .where('username', isEqualTo: emailOrUsername)
-            .limit(1)
-            .get();
-
-        if (querySnapshot.docs.isEmpty) {
-          return 'Username not found.';
+        // Search by username
+        if (foundType != null) {
+          final collection = foundType == 'customer' ? 'customers' : 'restaurants';
+          final querySnapshot = await _firestore.collection(collection).where('username', isEqualTo: emailOrUsername).limit(1).get();
+          if (querySnapshot.docs.isEmpty) return {'error': 'Username not found.'};
+          email = querySnapshot.docs.first.data()['email'];
+        } else {
+          // Search both
+          final custSnap = await _firestore.collection('customers').where('username', isEqualTo: emailOrUsername).limit(1).get();
+          if (custSnap.docs.isNotEmpty) {
+            foundType = 'customer';
+            email = custSnap.docs.first.data()['email'];
+          } else {
+            final restSnap = await _firestore.collection('restaurants').where('username', isEqualTo: emailOrUsername).limit(1).get();
+            if (restSnap.docs.isNotEmpty) {
+              foundType = 'restaurant';
+              email = restSnap.docs.first.data()['email'];
+            } else {
+              return {'error': 'Username not found.'};
+            }
+          }
         }
-        email = querySnapshot.docs.first.data()['email'];
       }
 
-      await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-
+      await _auth.signInWithEmailAndPassword(email: email, password: password);
       final uid = _auth.currentUser!.uid;
-      final collection = userType == 'customer' ? 'customers' : 'restaurants';
-      final docSnapshot = await _firestore.collection(collection).doc(uid).get();
 
-      if (!docSnapshot.exists) {
-        await _auth.signOut();
-        return 'No $userType account found for this email.';
+      if (foundType == null) {
+        // We logged in with email, but we don't know the type yet. Check DB using UID
+        final custDoc = await _firestore.collection('customers').doc(uid).get();
+        if (custDoc.exists) {
+          foundType = 'customer';
+        } else {
+          final restDoc = await _firestore.collection('restaurants').doc(uid).get();
+          if (restDoc.exists) {
+            foundType = 'restaurant';
+          } else {
+            await _auth.signOut();
+            return {'error': 'No account data found.'};
+          }
+        }
+      } else {
+         // Verify doc exists if type was given
+         final collection = foundType == 'customer' ? 'customers' : 'restaurants';
+         final docSnapshot = await _firestore.collection(collection).doc(uid).get();
+         if (!docSnapshot.exists) {
+            await _auth.signOut();
+            return {'error': 'No account found for this user type.'};
+         }
       }
 
-      return null;
+      return {'type': foundType};
     } on FirebaseAuthException catch (e) {
-      return e.message;
+      return {'error': e.message};
     } catch (e) {
-      return e.toString();
+      return {'error': e.toString()};
     }
   }
 
-  Future<String?> signInWithGoogle({required String userType}) async {
+  Future<Map<String, dynamic>> signInWithGoogle({String? userType}) async {
     try {
-      // Use the pattern that was working on this machine
       await GoogleSignIn.instance.initialize();
       final GoogleSignInAccount? account = await GoogleSignIn.instance.authenticate();
 
-      if (account == null) return "Google sign-in cancelled";
+      if (account == null) return {'error': "Google sign-in cancelled"};
 
       final GoogleSignInAuthentication googleAuth = await account.authentication;
       final AuthCredential credential = GoogleAuthProvider.credential(
@@ -117,38 +138,90 @@ class AuthService {
       final User? user = userCredential.user;
 
       if (user != null) {
-        final collection = userType == 'customer' ? 'customers' : 'restaurants';
-        final doc = await _firestore.collection(collection).doc(user.uid).get();
+        // If logging in indiscriminately, check what type they are
+        String? foundType = userType;
+        
+        final baseName = user.displayName ?? user.email?.split('@').first ?? 'user';
+        final uniqueUsername = await _generateValidUsername(baseName);
 
-        if (!doc.exists) {
-          // Check if user exists in the OTHER collection to prevent dual-type accounts with same UID if that's a goal, 
-          // but for simplicity here we just create if not exists in target collection.
-          await _firestore.collection(collection).doc(user.uid).set({
-            'email': user.email,
-            'username': user.displayName ?? user.email?.split('@').first,
-            'user_type': userType,
-            'created_at': FieldValue.serverTimestamp(),
-            'photo_url': user.photoURL,
-          });
+        if (foundType == null) {
+          final custDoc = await _firestore.collection('customers').doc(user.uid).get();
+          if (custDoc.exists) {
+            foundType = 'customer';
+          } else {
+            final restDoc = await _firestore.collection('restaurants').doc(user.uid).get();
+            if (restDoc.exists) {
+              foundType = 'restaurant';
+            } else {
+              // default to customer if they use google sign in and don't exist? 
+              // Better to reject and force signup. Or create as customer.
+              // Let's create as customer if trying to sign in with Google for the first time without type.
+               await _firestore.collection('customers').doc(user.uid).set({
+                'email': user.email,
+                'username': uniqueUsername,
+                'user_type': 'customer',
+                'created_at': FieldValue.serverTimestamp(),
+                'photo_url': user.photoURL,
+              });
+              foundType = 'customer';
+            }
+          }
+        } else {
+          // They explicitly chose a type (e.g., from a specific signup flow)
+          final collection = foundType == 'customer' ? 'customers' : 'restaurants';
+          final doc = await _firestore.collection(collection).doc(user.uid).get();
+
+          if (!doc.exists) {
+            await _firestore.collection(collection).doc(user.uid).set({
+              'email': user.email,
+              'username': uniqueUsername,
+              'user_type': foundType,
+              'created_at': FieldValue.serverTimestamp(),
+              'photo_url': user.photoURL,
+            });
+          }
         }
+        return {'type': foundType};
       }
-      return null;
+      return {'error': "User is null"};
     } on FirebaseAuthException catch (e) {
-      return e.message;
+      return {'error': e.message};
     } catch (e) {
-      return e.toString();
+      return {'error': e.toString()};
     }
   }
 
   // --- Profile Management ---
+  Future<String> _generateValidUsername(String baseName) async {
+    // Sanitize: lowercase, keep only alphanumeric and underscores
+    String sanitized = baseName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');
+    if (sanitized.length < 3) sanitized = 'user_$sanitized';
+    if (sanitized.length > 15) sanitized = sanitized.substring(0, 15);
+    
+    // Check uniqueness
+    String currentTry = sanitized;
+    int counter = 1;
+
+    while (true) {
+      final custSnap = await _firestore.collection('customers').where('username', isEqualTo: currentTry).limit(1).get();
+      final restSnap = await _firestore.collection('restaurants').where('username', isEqualTo: currentTry).limit(1).get();
+      
+      if (custSnap.docs.isEmpty && restSnap.docs.isEmpty) {
+        return currentTry; // Unique
+      }
+      
+      // Append number if taken
+      final suffix = counter.toString();
+      final maxBaseLen = 15 - suffix.length;
+      currentTry = "${sanitized.substring(0, sanitized.length > maxBaseLen ? maxBaseLen : sanitized.length)}$suffix";
+      counter++;
+    }
+  }
+
   Future<bool> isUsernameAvailable(String username, String userType) async {
-    final collection = userType == 'customer' ? 'customers' : 'restaurants';
-    final query = await _firestore
-        .collection(collection)
-        .where('username', isEqualTo: username)
-        .limit(1)
-        .get();
-    return query.docs.isEmpty;
+    final custQuery = await _firestore.collection('customers').where('username', isEqualTo: username).limit(1).get();
+    final restQuery = await _firestore.collection('restaurants').where('username', isEqualTo: username).limit(1).get();
+    return custQuery.docs.isEmpty && restQuery.docs.isEmpty;
   }
 
   Future<String?> updateUserProfile({String? displayName, String? photoUrl}) async {
