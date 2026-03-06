@@ -25,21 +25,6 @@ if (!STRIPE_SECRET_KEY) {
 
 const stripe = require('stripe')(STRIPE_SECRET_KEY);
 
-const STRIPE_FEE_PERCENT = 2.9;
-const STRIPE_FEE_FIXED_PAISA = 1100; // 11 PKR in paisa
-const PLATFORM_FEE_PERCENT = 5;
-
-/**
- * Calculates the processing fee so that after Stripe takes its cut,
- * the platform receives the full order amount.
- * Formula: charge = (total + fixedFee) / (1 - stripeFeePercent/100)
- *          processingFee = charge - total
- */
-function calculateProcessingFee(totalPaisa) {
-  const chargeNeeded = Math.ceil((totalPaisa + STRIPE_FEE_FIXED_PAISA) / (1 - STRIPE_FEE_PERCENT / 100));
-  return chargeNeeded - totalPaisa;
-}
-
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
@@ -93,20 +78,6 @@ app.post('/create-checkout-session', async (req, res) => {
       quantity: item.quantity,
     }));
 
-    const totalPaisa = items.reduce(
-      (sum, item) => sum + item.priceInPaisa * item.quantity, 0
-    );
-    const processingFeePaisa = calculateProcessingFee(totalPaisa);
-
-    lineItems.push({
-      price_data: {
-        currency: currency || 'pkr',
-        product_data: { name: 'Processing Fee' },
-        unit_amount: processingFeePaisa,
-      },
-      quantity: 1,
-    });
-
     const sessionParams = {
       mode: 'payment',
       line_items: lineItems,
@@ -121,7 +92,7 @@ app.post('/create-checkout-session', async (req, res) => {
 
     const session = await stripe.checkout.sessions.create(sessionParams);
 
-    res.json({ url: session.url, sessionId: session.id, processingFeePaisa });
+    res.json({ url: session.url, sessionId: session.id });
   } catch (err) {
     console.error('[create-checkout-session]', err.message);
     res.status(500).json({ error: err.message });
@@ -252,6 +223,8 @@ app.post('/charge-saved-card', async (req, res) => {
 
 // ─── Stripe Connect ───
 
+const PLATFORM_FEE_PERCENT = 5;
+
 /**
  * Create a Stripe Connect account for a restaurant and return an onboarding link.
  * Body: { restaurantId, email, businessName, appBaseUrl }
@@ -371,20 +344,9 @@ app.post('/create-connected-checkout', async (req, res) => {
       (sum, item) => sum + item.priceInPaisa * item.quantity,
       0
     );
-    const processingFeePaisa = calculateProcessingFee(totalAmountPaisa);
-
-    lineItems.push({
-      price_data: {
-        currency: currency || 'pkr',
-        product_data: { name: 'Processing Fee' },
-        unit_amount: processingFeePaisa,
-      },
-      quantity: 1,
-    });
-
     const normalFeePaisa = Math.round(totalAmountPaisa * PLATFORM_FEE_PERCENT / 100);
     const debtRecoveredPaisa = Math.min(debt, totalAmountPaisa - normalFeePaisa);
-    const totalApplicationFeePaisa = normalFeePaisa + Math.max(0, debtRecoveredPaisa) + processingFeePaisa;
+    const totalApplicationFeePaisa = normalFeePaisa + Math.max(0, debtRecoveredPaisa);
 
     const sessionParams = {
       mode: 'payment',
@@ -410,8 +372,7 @@ app.post('/create-connected-checkout', async (req, res) => {
       normalFeePaisa,
       debtRecoveredPaisa: Math.max(0, debtRecoveredPaisa),
       totalApplicationFeePaisa,
-      restaurantAmountPaisa: totalAmountPaisa - normalFeePaisa - Math.max(0, debtRecoveredPaisa),
-      processingFeePaisa,
+      restaurantAmountPaisa: totalAmountPaisa - totalApplicationFeePaisa,
     });
   } catch (err) {
     console.error('[create-connected-checkout]', err.message);
@@ -435,15 +396,12 @@ app.post('/charge-saved-card-connected', async (req, res) => {
       });
     }
 
-    const processingFeePaisa = calculateProcessingFee(amountInPaisa);
-    const chargeAmountPaisa = amountInPaisa + processingFeePaisa;
-
     const normalFeePaisa = Math.round(amountInPaisa * PLATFORM_FEE_PERCENT / 100);
     const debtRecoveredPaisa = Math.min(debt, amountInPaisa - normalFeePaisa);
-    const totalApplicationFeePaisa = normalFeePaisa + Math.max(0, debtRecoveredPaisa) + processingFeePaisa;
+    const totalApplicationFeePaisa = normalFeePaisa + Math.max(0, debtRecoveredPaisa);
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: chargeAmountPaisa,
+      amount: amountInPaisa,
       currency: currency || 'pkr',
       customer: customerId,
       payment_method: paymentMethodId,
@@ -461,8 +419,7 @@ app.post('/charge-saved-card-connected', async (req, res) => {
       normalFeePaisa,
       debtRecoveredPaisa: Math.max(0, debtRecoveredPaisa),
       totalApplicationFeePaisa,
-      restaurantAmountPaisa: amountInPaisa - normalFeePaisa - Math.max(0, debtRecoveredPaisa),
-      processingFeePaisa,
+      restaurantAmountPaisa: amountInPaisa - totalApplicationFeePaisa,
     });
   } catch (err) {
     console.error('[charge-saved-card-connected]', err.message);
@@ -487,30 +444,6 @@ app.post('/connect-dashboard-link', async (req, res) => {
     res.json({ url: loginLink.url });
   } catch (err) {
     console.error('[connect-dashboard-link]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /verify-checkout-session
- * Checks if a Stripe Checkout session was paid.
- * Body: { sessionId }
- * Returns: { paid: true/false, paymentStatus: 'paid'|'unpaid'|'no_payment_required' }
- */
-app.post('/verify-checkout-session', async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-    if (!sessionId) {
-      return res.status(400).json({ error: 'sessionId is required' });
-    }
-
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-    res.json({
-      paid: session.payment_status === 'paid',
-      paymentStatus: session.payment_status,
-    });
-  } catch (err) {
-    console.error('[verify-checkout-session]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

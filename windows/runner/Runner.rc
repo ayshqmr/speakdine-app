@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "speak_dine" "\0"
+            VALUE "CompanyName", "com.speakdine.app" "\0"
+            VALUE "FileDescription", "speakdine_app" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "speak_dine" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "speak_dine.exe" "\0"
-            VALUE "ProductName", "speak_dine" "\0"
+            VALUE "InternalName", "speakdine_app" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.speakdine.app. All rights reserved." "\0"
+            VALUE "OriginalFilename", "speakdine_app.exe" "\0"
+            VALUE "ProductName", "speakdine_app" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

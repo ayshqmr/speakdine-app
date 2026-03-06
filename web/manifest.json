@@ -1,11 +1,11 @@
 {
-    "name": "speak_dine",
-    "short_name": "speak_dine",
+    "name": "speakdine_app",
+    "short_name": "speakdine_app",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Restaurant app for visually impaired individuals",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
