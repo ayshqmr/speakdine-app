@@ -23,13 +23,6 @@ migrate_working_dir/
 # is commented out by default.
 #.vscode/
 
-# API keys
-lib/config/api_keys.dart
-
-# Server
-server/.env
-server/node_modules/
-
 # Flutter/Dart/Pub related
 **/doc/api/
 **/ios/Flutter/.last_build_id

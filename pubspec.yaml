@@ -1,4 +1,4 @@
-name: speak_dine
+name: speakdine_app
 description: "Restaurant app for visually impaired individuals"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.2
+  sdk: ^3.10.4
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -31,59 +31,101 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+
+  firebase_core: ^3.8.1
+  cloud_firestore: ^5.6.0
+  firebase_auth: ^5.3.4
+  google_sign_in: any
+  image_picker: ^1.0.7
+  firebase_storage: any
+  shared_preferences: any
+  flutter_svg: any
+  pinput: any
+  pdf: any
+  printing: any
+  path_provider: any
+  intl: any
+  flutter_animate: any
+  animate_do: any
+  another_flushbar: any
+  flutter_spinkit: any
+  google_fonts: any
+  url_launcher: ^6.2.5
+  http: ^1.6.0
+  flutter_tts: ^4.0.2
+  speech_to_text: ^7.0.0
   shadcn_flutter: ^0.0.51
   skeletonizer: ^2.1.3
-
-  # Firebase
-  firebase_core: ^3.8.1
-  firebase_auth: ^5.3.4
-  cloud_firestore: ^5.6.0
-  image_picker: ^1.0.7
-  http: ^1.2.1
-
-  url_launcher: ^6.2.5
 
   # Maps & Location
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   geolocator: ^13.0.2
   geocoding: ^3.0.0
+  google_generative_ai: ^0.4.7
+
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
   flutter_lints: ^5.0.0
-  flutter_launcher_icons: ^0.14.3
-
-flutter_launcher_icons:
-  android: true
-  ios: true
-  image_path: "assets/speakdine_logo.png"
-  adaptive_icon_background: "#FFF1F2"
-  adaptive_icon_foreground: "assets/speakdine_logo.png"
-  web:
-    generate: true
-    image_path: "assets/speakdine_logo.png"
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
 flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
   uses-material-design: true
   assets:
-    - assets/speakdine_logo.png
+    - assets/icons/
     - assets/splash.png
     - assets/splash_view.png
-    - assets/startup_bg.png
+    - assets/bg_light.png
+    - assets/bg_dark.png
     - assets/app_bg.png
-    - assets/auth_bg.jpg
+    - assets/imgs/
+    - assets/imgs/onboarding_welcome.png
+    - assets/imgs/onboarding_accessibility.png
+    - assets/imgs/onboarding_ready.png
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
 
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
 
-  # Typography is handled by shadcn_flutter (Geist font)
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  fonts:
+    - family: Metropolis
+      fonts:
+        - asset: assets/font/Metropolis-Regular.otf
+        - asset: assets/font/Metropolis-Medium.otf
+          weight: 500
+        - asset: assets/font/Metropolis-SemiBold.otf
+          weight: 600
+        - asset: assets/font/Metropolis-Bold.otf
+          weight: 700
+        - asset: assets/font/Metropolis-ExtraBold.otf
+          weight: 800
+
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/icons/speakdine_logo.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
