@@ -19,7 +19,6 @@ class LoginScreen extends StatefulWidget {
 
 class _SignInViewState extends State<LoginScreen> with SingleTickerProviderStateMixin {
   final _authService = AuthService();
-  String _uType = "Customer";
   late AnimationController _shakeController;
 
   @override
@@ -76,31 +75,14 @@ class _SignInViewState extends State<LoginScreen> with SingleTickerProviderState
             child: Column(
               children: [
                 // Logo
-                Container(
+                Image.asset(
+                  "assets/icons/speakdine_logo.png",
                   width: 120,
                   height: 120,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: colorExt.primary.withValues(alpha: 0.15),
-                        blurRadius: 25,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Image.asset(
-                      "assets/icons/speakdine_logo.png",
-                      width: 80,
-                      height: 80,
-                      errorBuilder: (context, error, stackTrace) => Icon(
-                        Icons.restaurant_rounded,
-                        size: 60,
-                        color: colorExt.primary,
-                      ),
-                    ),
+                  errorBuilder: (context, error, stackTrace) => Icon(
+                    Icons.restaurant_rounded,
+                    size: 80,
+                    color: colorExt.primary,
                   ),
                 )
                 .animate()
@@ -198,43 +180,15 @@ class _SignInViewState extends State<LoginScreen> with SingleTickerProviderState
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // Role Selection (Refined Dropdown)
-                            _buildRoleDropdown()
-                            .animate()
-                            .fadeIn(delay: 500.ms, duration: 500.ms),
-
-                            const SizedBox(height: 28),
-
                             // Form Section
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 400),
-                              child: _uType == "Customer"
-                                  ? _CustomerSignInForm(
-                                      key: const ValueKey("CustomerForm"),
-                                      authService: _authService,
-                                      onSignUp: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const SignupScreen()),
-                                      ),
-                                      onForgotPassword: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const ForgotPasswordScreen(userType: 'customer')),
-                                      ),
-                                      onError: _triggerShake,
-                                    )
-                                  : _RestaurantSignInForm(
-                                      key: const ValueKey("RestaurantForm"),
-                                      authService: _authService,
-                                      onSignUp: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const RestaurantRegistrationView()),
-                                      ),
-                                      onForgotPassword: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const ForgotPasswordScreen(userType: 'restaurant')),
-                                      ),
-                                      onError: _triggerShake,
-                                    ),
+                            _UnifiedSignInForm(
+                              key: const ValueKey("UnifiedForm"),
+                              authService: _authService,
+                              onSignUp: _showSignupBottomSheet,
+                              onForgotPassword: () {
+                                _showForgotPasswordBottomSheet();
+                              },
+                              onError: _triggerShake,
                             ),
                           ],
                         ),
@@ -252,100 +206,124 @@ class _SignInViewState extends State<LoginScreen> with SingleTickerProviderState
     );
   }
 
-  Widget _buildRoleDropdown() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: colorExt.primary.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _uType,
-          icon: Icon(Icons.expand_more_rounded, color: colorExt.primary),
-          isExpanded: true,
-          dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          items: [
-            _buildDropdownItem(
-              title: "Sign in as Customer",
-              subtitle: "Order delicious food & book tables",
-              icon: Icons.person_rounded,
-              value: "Customer",
-              semanticsLabel: "Sign in as a customer to order food and book tables",
-            ),
-            _buildDropdownItem(
-              title: "Sign in as Restaurant",
-              subtitle: "Manage your menu & track orders",
-              icon: Icons.restaurant_rounded,
-              value: "Restaurant",
-              semanticsLabel: "Sign in as a restaurant owner to manage menu and track orders",
-            ),
-          ],
-          onChanged: (String? newValue) {
-            if (newValue != null) {
-              setState(() => _uType = newValue);
-            }
-          },
-        ),
+  void _showSignupBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _buildRoleSelectionSheet(
+        title: "Join SpeakDine",
+        subtitle: "How would you like to register?",
+        onCustomerTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const SignupScreen()));
+        },
+        onRestaurantTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const RestaurantRegistrationView()));
+        },
       ),
     );
   }
 
-  DropdownMenuItem<String> _buildDropdownItem({
+  void _showForgotPasswordBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _buildRoleSelectionSheet(
+        title: "Forgot Password",
+        subtitle: "Which account needs recovery?",
+        onCustomerTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const ForgotPasswordScreen(userType: 'customer')));
+        },
+        onRestaurantTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const ForgotPasswordScreen(userType: 'restaurant')));
+        },
+      ),
+    );
+  }
+
+  Widget _buildRoleSelectionSheet({
+    required String title,
+    required String subtitle,
+    required VoidCallback onCustomerTap,
+    required VoidCallback onRestaurantTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.95),
+        borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 20, offset: const Offset(0, -5))
+        ]
+      ),
+      padding: const EdgeInsets.fromLTRB(28, 16, 28, 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 40, height: 5, decoration: BoxDecoration(color: colorExt.placeholder, borderRadius: BorderRadius.circular(10))),
+          const SizedBox(height: 24),
+          Text(title, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.w800, color: colorExt.primaryText)),
+          const SizedBox(height: 8),
+          Text(subtitle, style: GoogleFonts.outfit(fontSize: 14, fontWeight: FontWeight.w500, color: colorExt.secondaryText)),
+          const SizedBox(height: 32),
+          _methodCard(
+            title: "Customer",
+            subtitle: "Order food and book tables",
+            icon: Icons.person_rounded,
+            onTap: onCustomerTap,
+          ),
+          const SizedBox(height: 16),
+          _methodCard(
+            title: "Restaurant",
+            subtitle: "Manage your business",
+            icon: Icons.restaurant_rounded,
+            onTap: onRestaurantTap,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _methodCard({
     required String title,
     required String subtitle,
     required IconData icon,
-    required String value,
-    required String semanticsLabel,
+    required VoidCallback onTap,
   }) {
-    return DropdownMenuItem<String>(
-      value: value,
-      child: Semantics(
-        label: semanticsLabel,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: colorExt.primary.withValues(alpha: 0.2)),
+          boxShadow: [
+            BoxShadow(color: colorExt.primary.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4)),
+          ],
+        ),
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: colorExt.primary.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: colorExt.primary, size: 24),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: colorExt.primary.withValues(alpha: 0.1), shape: BoxShape.circle),
+              child: Icon(icon, color: colorExt.primary, size: 28),
             ),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: GoogleFonts.outfit(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: colorExt.primaryText,
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: GoogleFonts.outfit(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: colorExt.secondaryText,
-                    ),
-                  ),
+                  Text(title, style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.w800, color: colorExt.primaryText)),
+                  Text(subtitle, style: GoogleFonts.outfit(fontSize: 13, fontWeight: FontWeight.w500, color: colorExt.secondaryText)),
                 ],
               ),
             ),
+            Icon(Icons.arrow_forward_ios_rounded, size: 16, color: colorExt.primary.withValues(alpha: 0.5)),
           ],
         ),
       ),
@@ -428,13 +406,13 @@ Widget _inputField({
   );
 }
 
-class _CustomerSignInForm extends StatefulWidget {
+class _UnifiedSignInForm extends StatefulWidget {
   final AuthService authService;
   final VoidCallback onSignUp;
   final VoidCallback onForgotPassword;
   final VoidCallback onError;
 
-  const _CustomerSignInForm({
+  const _UnifiedSignInForm({
     super.key,
     required this.authService,
     required this.onSignUp,
@@ -443,10 +421,10 @@ class _CustomerSignInForm extends StatefulWidget {
   });
 
   @override
-  State<_CustomerSignInForm> createState() => _CustomerSignInFormState();
+  State<_UnifiedSignInForm> createState() => _UnifiedSignInFormState();
 }
 
-class _CustomerSignInFormState extends State<_CustomerSignInForm> {
+class _UnifiedSignInFormState extends State<_UnifiedSignInForm> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -467,35 +445,42 @@ class _CustomerSignInFormState extends State<_CustomerSignInForm> {
     }
 
     setState(() => _isLoading = true);
-    final error = await widget.authService.signInWithEmail(
+    final result = await widget.authService.signInWithEmail(
       emailOrUsername: _emailController.text.trim(),
       password: _passwordController.text,
-      userType: 'customer',
+      userType: null, // Let the service auto-detect the user role
     );
 
     if (mounted) {
       setState(() => _isLoading = false);
-      if (error != null) {
+      if (result['error'] != null) {
         widget.onError();
-        PremiumSnackbar.show(context, message: error, isError: true);
+        PremiumSnackbar.show(context, message: result['error']!, isError: true);
       } else {
-        Navigator.of(context).pushReplacementNamed('/customer-home');
+        if (result['type'] == 'restaurant') {
+           Navigator.of(context).pushReplacementNamed('/restaurant-home');
+        } else {
+           Navigator.of(context).pushReplacementNamed('/customer-home');
+        }
       }
     }
   }
 
   Future<void> _handleGoogleSignIn() async {
     setState(() => _isLoading = true);
-    final error = await widget.authService.signInWithGoogle(userType: 'customer');
+    final result = await widget.authService.signInWithGoogle(userType: null);
 
     if (mounted) {
-      if (error != null) {
+      if (result['error'] != null) {
         widget.onError();
-        PremiumSnackbar.show(context, message: error, isError: true);
+        PremiumSnackbar.show(context, message: result['error']!, isError: true);
         setState(() => _isLoading = false);
       } else {
-        // Redirect
-        Navigator.of(context).pushReplacementNamed('/customer-home');
+        if (result['type'] == 'restaurant') {
+           Navigator.of(context).pushReplacementNamed('/restaurant-home');
+        } else {
+           Navigator.of(context).pushReplacementNamed('/customer-home');
+        }
       }
     }
   }
@@ -653,152 +638,6 @@ class _CustomerSignInFormState extends State<_CustomerSignInForm> {
                 onTap: widget.onSignUp,
                 child: Text(
                   "Create an account",
-                  style: GoogleFonts.outfit(
-                    color: const Color(0xff922052),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RestaurantSignInForm extends StatefulWidget {
-  final AuthService authService;
-  final VoidCallback onSignUp;
-  final VoidCallback onForgotPassword;
-  final VoidCallback onError;
-
-  const _RestaurantSignInForm({
-    super.key,
-    required this.authService,
-    required this.onSignUp,
-    required this.onForgotPassword,
-    required this.onError,
-  });
-
-  @override
-  State<_RestaurantSignInForm> createState() => _RestaurantSignInFormState();
-}
-
-class _RestaurantSignInFormState extends State<_RestaurantSignInForm> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
-  bool _obscurePassword = true;
-
-  Future<void> _handleSignIn() async {
-    if (!_formKey.currentState!.validate()) {
-      widget.onError();
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    final error = await widget.authService.signInWithEmail(
-      emailOrUsername: _emailController.text.trim(),
-      password: _passwordController.text,
-      userType: 'restaurant',
-    );
-
-    if (mounted) {
-      setState(() => _isLoading = false);
-      if (error != null) {
-        widget.onError();
-        PremiumSnackbar.show(context, message: error, isError: true);
-      } else {
-        Navigator.of(context).pushReplacementNamed('/restaurant-home');
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Form(
-      key: _formKey,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _inputField(
-            controller: _emailController,
-            label: "Restaurant Email",
-            icon: Icons.restaurant_rounded,
-            validator: (val) => val == null || val.isEmpty ? "Required" : null,
-          ),
-
-          const SizedBox(height: 18),
-
-          _inputField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            label: "Password",
-            icon: Icons.password_rounded,
-            suffix: IconButton(
-              icon: Icon(
-                _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                color: const Color(0xff6B5660),
-              ),
-              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-            ),
-            validator: (val) => val == null || val.isEmpty ? "Required" : null,
-          ),
-
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: widget.onForgotPassword,
-              child: Text(
-                "Forgot Password?",
-                style: GoogleFonts.outfit(
-                  color: const Color(0xff922052),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          SizedBox(
-            height: 56,
-            child: FilledButton(
-              onPressed: _isLoading ? null : _handleSignIn,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xff922052),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                elevation: 4,
-              ),
-              child: _isLoading
-                  ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
-                  : Text(
-                      "SIGN IN",
-                      style: GoogleFonts.outfit(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                "Not registered? ",
-                style: GoogleFonts.outfit(color: const Color(0xff6B5660)),
-              ),
-              GestureDetector(
-                onTap: widget.onSignUp,
-                child: Text(
-                  "Register restaurant",
                   style: GoogleFonts.outfit(
                     color: const Color(0xff922052),
                     fontWeight: FontWeight.w700,

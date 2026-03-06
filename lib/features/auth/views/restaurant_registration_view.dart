@@ -109,6 +109,12 @@ class _RestaurantRegistrationViewState extends State<RestaurantRegistrationView>
         _triggerShake();
         return;
       }
+      final userError = validateUsername(_usernameController.text);
+      if (userError != null) {
+        PremiumSnackbar.show(context, message: userError, isError: true);
+        _triggerShake();
+        return;
+      }
     } else if (_currentStep == 1) { // Credentials
       if (_emailController.text.isEmpty || !_authService.isValidEmail(_emailController.text)) {
         PremiumSnackbar.show(context, message: "Enter a valid email", isError: true);

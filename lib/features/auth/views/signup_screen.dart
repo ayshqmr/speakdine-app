@@ -95,9 +95,10 @@ class _CustomerSignupViewState extends State<SignupScreen> with SingleTickerProv
       return;
     }
 
-    if (!RegExp(r'^[a-z0-9_]{3,15}$').hasMatch(text)) {
+    final error = validateUsername(text);
+    if (error != null) {
       setState(() {
-        _usernameError = "3-15 chars, lowercase, digits, underscore only";
+        _usernameError = error;
         _isUsernameTaken = false;
       });
       return;
@@ -152,11 +153,11 @@ class _CustomerSignupViewState extends State<SignupScreen> with SingleTickerProv
 
   Future<void> _handleGoogleSignup() async {
     setState(() => _isLoading = true);
-    final error = await AuthService().signInWithGoogle(userType: 'customer');
+    final result = await AuthService().signInWithGoogle(userType: 'customer');
     if (mounted) {
       setState(() => _isLoading = false);
-      if (error != null) {
-        PremiumSnackbar.show(context, message: error, isError: true);
+      if (result['error'] != null) {
+        PremiumSnackbar.show(context, message: result['error'], isError: true);
         _triggerShake();
       } else {
         _showSuccessDialog();
