@@ -5,12 +5,14 @@ import 'package:speakdine_app/core/theme/color_ext.dart';
 /// Calculates password strength (0–4) based on criteria:
 /// - Length >= 8
 /// - Uppercase letter
+/// - Lowercase letter
 /// - Number
 /// - Special character
 int calcPasswordStrength(String password) {
   int score = 0;
   if (password.length >= 8) score++;
   if (password.contains(RegExp(r'[A-Z]'))) score++;
+  if (password.contains(RegExp(r'[a-z]'))) score++;
   if (password.contains(RegExp(r'[0-9]'))) score++;
   if (password.contains(RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]'))) score++;
   return score;
@@ -22,6 +24,7 @@ String? validatePasswordStrength(String? password) {
   if (password == null || password.isEmpty) return "Password is required";
   if (password.length < 8) return "At least 8 characters";
   if (!password.contains(RegExp(r'[A-Z]'))) return "Add at least 1 uppercase letter (A-Z)";
+  if (!password.contains(RegExp(r'[a-z]'))) return "Add at least 1 lowercase letter (a-z)";
   if (!password.contains(RegExp(r'[0-9]'))) return "Add at least 1 number (0-9)";
   if (!password.contains(RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]'))) {
     return "Add at least 1 special character (!@#\$...)";
@@ -57,10 +60,11 @@ class PasswordStrengthIndicator extends StatelessWidget {
         final color = strengthColors[strength];
 
         final checks = [
-          _PasswordCheck(label: "8+ characters", passed: password.length >= 8),
-          _PasswordCheck(label: "Uppercase letter (A-Z)", passed: password.contains(RegExp(r'[A-Z]'))),
+          _PasswordCheck(label: "8+ chars", passed: password.length >= 8),
+          _PasswordCheck(label: "Uppercase (A-Z)", passed: password.contains(RegExp(r'[A-Z]'))),
+          _PasswordCheck(label: "Lowercase (a-z)", passed: password.contains(RegExp(r'[a-z]'))),
           _PasswordCheck(label: "Number (0-9)", passed: password.contains(RegExp(r'[0-9]'))),
-          _PasswordCheck(label: "Special character (!@#\$...)", passed: password.contains(RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]'))),
+          _PasswordCheck(label: "Symbol (!@#\$...)", passed: password.contains(RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]'))),
         ];
 
         return AnimatedContainer(
@@ -142,4 +146,17 @@ class _PasswordCheck {
   final String label;
   final bool passed;
   const _PasswordCheck({required this.label, required this.passed});
+}
+
+/// Validates a username:
+/// - 3 to 15 characters
+/// - Lowercase letters, digits, underscores, and dots only.
+String? validateUsername(String? username) {
+  if (username == null || username.isEmpty) return "Username is required";
+  if (username.length < 3 || username.length > 15) return "Must be 3-15 characters";
+  // Check if it contains invalid characters
+  if (!RegExp(r'^[a-z0-9_.]+$').hasMatch(username)) {
+    return "Lowercase, numbers, _, and . only";
+  }
+  return null;
 }
