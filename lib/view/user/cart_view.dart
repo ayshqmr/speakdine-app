@@ -1,15 +1,18 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
-import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/material.dart' as material show Icon, Icons, IconButton;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/services/payment_service.dart';
+import 'package:speak_dine/services/speech_service.dart';
+import 'package:speak_dine/services/intent_service.dart';
 
 class CartView extends StatefulWidget {
   final bool embedded;
+  final VoidCallback? onOrderPlaced;
 
-  const CartView({super.key, this.embedded = false});
+  const CartView({super.key, this.embedded = false, this.onOrderPlaced});
 
   @override
   State<CartView> createState() => _CartViewState();
@@ -17,7 +20,64 @@ class CartView extends StatefulWidget {
 
 class _CartViewState extends State<CartView> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final SpeechService _speechService = SpeechService();
+  final IntentService _intentService = IntentService();
   bool _placingOrder = false;
+  bool _isListening = false;
+  String _recognizedText = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _speechService.init();
+  }
+
+  @override
+  void dispose() {
+    _speechService.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleVoiceCommand(String text) async {
+    setState(() {
+      _recognizedText = text;
+      _isListening = false;
+    });
+    final intent = _intentService.detectIntent(text);
+    bool stayedOnScreen = true;
+
+    if (intent.action == 'PLACE_ORDER') {
+      if (cartService.isEmpty) {
+        await _speechService.speak('Your cart is empty. Add items first.');
+      } else {
+        await _speechService.speak('Opening payment options.');
+        _showPaymentMethodDialog();
+        stayedOnScreen = false;
+      }
+    } else if (intent.action != 'UNKNOWN') {
+      await _speechService.speak('Say place order to confirm and pay.');
+    } else {
+      await _speechService.speak('Say place order to place your order.');
+    }
+
+    if (stayedOnScreen && mounted) _restartListeningAfterDelay();
+  }
+
+  void _restartListeningAfterDelay() {
+    Future.delayed(const Duration(milliseconds: 2200), () async {
+      if (!mounted) return;
+      final started = await _speechService.startListening(
+        onResultText: (text, isFinal) {
+          if (isFinal && text.trim().isNotEmpty) {
+            _handleVoiceCommand(text);
+          } else {
+            setState(() => _recognizedText = text);
+          }
+        },
+      );
+      if (started && mounted) setState(() => _isListening = true);
+    });
+  }
 
   void _increaseQuantity(String restaurantId, int index) {
     setState(() => cartService.increaseQuantity(restaurantId, index));
@@ -347,6 +407,7 @@ class _CartViewState extends State<CartView> {
       } else {
         showAppToast(context, 'Order placed successfully!');
       }
+      widget.onOrderPlaced?.call();
       if (!widget.embedded) Navigator.pop(context);
     } catch (_) {
       if (!mounted) return;
@@ -443,6 +504,33 @@ class _CartViewState extends State<CartView> {
                   ],
                 ),
               ),
+              if (widget.embedded)
+                material.IconButton(
+                  icon: material.Icon(
+                    _isListening ? material.Icons.mic : material.Icons.mic_none,
+                    size: 22,
+                    color: theme.colorScheme.primary,
+                  ),
+                  onPressed: () async {
+                    if (_isListening) {
+                      await _speechService.stopListening();
+                      setState(() => _isListening = false);
+                    } else {
+                      final started = await _speechService.startListening(
+                        onResultText: (text, isFinal) {
+                          if (isFinal && text.trim().isNotEmpty) {
+                            _handleVoiceCommand(text);
+                          } else {
+                            setState(() => _recognizedText = text);
+                          }
+                        },
+                      );
+                      if (started) {
+                        setState(() => _isListening = true);
+                      }
+                    }
+                  },
+                ),
               if (cartService.isNotEmpty)
                 GhostButton(
                   density: ButtonDensity.compact,
@@ -457,6 +545,11 @@ class _CartViewState extends State<CartView> {
             ],
           ),
         ),
+        if (widget.embedded && _recognizedText.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Text('You said: $_recognizedText', style: TextStyle(fontSize: 12, color: theme.colorScheme.mutedForeground)),
+          ),
         const SizedBox(height: 16),
         Expanded(
           child: cartService.isEmpty

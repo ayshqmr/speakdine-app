@@ -40,6 +40,10 @@ class _CustomerShellState extends State<CustomerShell> {
     setState(() => _selectedIndex = _cartTabIndex);
   }
 
+  void _switchToPayments() {
+    setState(() => _selectedIndex = 3);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -61,10 +65,14 @@ class _CustomerShellState extends State<CustomerShell> {
                         builder: (_) => UserHomeView(
                           onCartChanged: () => setState(() {}),
                           onViewCart: _switchToCart,
+                          onViewPayments: _switchToPayments,
                         ),
                       ),
                     ),
-                    CartView(embedded: true),
+                    CartView(
+                      embedded: true,
+                      onOrderPlaced: _switchToPayments,
+                    ),
                     const CustomerOrdersView(),
                     const CustomerTransactionsView(),
                     const CustomerProfileView(),

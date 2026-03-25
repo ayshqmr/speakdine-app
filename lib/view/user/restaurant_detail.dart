@@ -1,14 +1,18 @@
+import 'package:flutter/material.dart' as material show Icon, Icons, IconButton;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:skeletonizer/skeletonizer.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speak_dine/services/cart_service.dart';
+import 'package:speak_dine/services/speech_service.dart';
+import 'package:speak_dine/services/intent_service.dart';
 
 class RestaurantDetailView extends StatefulWidget {
   final String restaurantId;
   final String restaurantName;
   final VoidCallback? onCartChanged;
   final VoidCallback? onViewCart;
+  final VoidCallback? onViewPayments;
 
   const RestaurantDetailView({
     super.key,
@@ -16,6 +20,7 @@ class RestaurantDetailView extends StatefulWidget {
     required this.restaurantName,
     this.onCartChanged,
     this.onViewCart,
+    this.onViewPayments,
   });
 
   @override
@@ -24,6 +29,22 @@ class RestaurantDetailView extends StatefulWidget {
 
 class _RestaurantDetailViewState extends State<RestaurantDetailView> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final SpeechService _speechService = SpeechService();
+  final IntentService _intentService = IntentService();
+  bool _isListening = false;
+  String _recognizedText = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _speechService.init();
+  }
+
+  @override
+  void dispose() {
+    _speechService.dispose();
+    super.dispose();
+  }
 
   void _addToCart(Map<String, dynamic> item, String itemId) {
     setState(() {
@@ -32,6 +53,117 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
     });
     widget.onCartChanged?.call();
     showAppToast(context, '${item['name']} added to cart');
+  }
+
+  Future<void> _handleVoiceCommand(String text) async {
+    setState(() {
+      _recognizedText = text;
+      _isListening = false;
+    });
+    final intent = _intentService.detectIntent(text);
+    bool stayedOnScreen = true;
+
+    switch (intent.action) {
+      case 'TELL_MENU':
+        await _speakMenu();
+        break;
+      case 'ADD_TO_CART':
+        await _addToCartByVoice(intent.itemName);
+        break;
+      case 'SHOW_CART':
+        await _speechService.speak('Opening cart');
+        widget.onViewCart?.call();
+        stayedOnScreen = false;
+        break;
+      case 'PLACE_ORDER':
+        await _speechService.speak('Opening cart to place order');
+        widget.onViewCart?.call();
+        stayedOnScreen = false;
+        break;
+      case 'MAKE_PAYMENT':
+        await _speechService.speak('Opening payments');
+        widget.onViewPayments?.call();
+        stayedOnScreen = false;
+        break;
+      default:
+        await _speechService.speak('Sorry, I did not understand. Say what is in the menu, or say the item name to add to cart.');
+    }
+
+    if (stayedOnScreen && mounted) _restartListeningAfterDelay();
+  }
+
+  void _restartListeningAfterDelay() {
+    Future.delayed(const Duration(milliseconds: 2200), () async {
+      if (!mounted) return;
+      final started = await _speechService.startListening(
+        onResultText: (text, isFinal) {
+          if (isFinal && text.trim().isNotEmpty) {
+            _handleVoiceCommand(text);
+          } else {
+            setState(() => _recognizedText = text);
+          }
+        },
+      );
+      if (started && mounted) setState(() => _isListening = true);
+    });
+  }
+
+  Future<void> _speakMenu() async {
+    final snapshot = await _firestore
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('menu')
+        .get();
+    if (!mounted) return;
+    final docs = snapshot.docs;
+    if (docs.isEmpty) {
+      await _speechService.speak('No items in menu yet.');
+      return;
+    }
+    final buffer = StringBuffer('${widget.restaurantName} menu. ');
+    for (final doc in docs) {
+      final d = doc.data();
+      final name = d['name'] as String? ?? 'Item';
+      final price = d['price'];
+      final p = price is num ? price.toDouble() : 0.0;
+      buffer.write('$name, ${p.toStringAsFixed(0)} rupees. ');
+    }
+    await _speechService.speak(buffer.toString());
+  }
+
+  Future<void> _addToCartByVoice(String? itemName) async {
+    final snapshot = await _firestore
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('menu')
+        .get();
+    if (!mounted) return;
+    final docs = snapshot.docs;
+    if (docs.isEmpty) {
+      await _speechService.speak('Menu is empty.');
+      return;
+    }
+    if (itemName == null || itemName.trim().isEmpty) {
+      await _speechService.speak('Say the item name to add to cart. For example, chicken burger.');
+      return;
+    }
+    final search = itemName.toLowerCase().trim();
+    QueryDocumentSnapshot? match;
+    for (final doc in docs) {
+      final d = doc.data();
+      final name = (d['name'] as String? ?? '').toLowerCase();
+      if (name.contains(search) || search.contains(name)) {
+        match = doc;
+        break;
+      }
+    }
+    if (match == null) {
+      await _speechService.speak('Item not found. Say what is in the menu to hear the list.');
+      return;
+    }
+    final item = match.data() as Map<String, dynamic>;
+    _addToCart(item, match.id);
+    await _speechService.speak('${item['name']} added to cart.');
   }
 
   @override
@@ -54,6 +186,32 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
               Expanded(
                 child: Text(widget.restaurantName).semiBold(),
               ),
+              material.IconButton(
+                icon: material.Icon(
+                  _isListening ? material.Icons.mic : material.Icons.mic_none,
+                  size: 22,
+                  color: theme.colorScheme.primary,
+                ),
+                  onPressed: () async {
+                    if (_isListening) {
+                      await _speechService.stopListening();
+                      setState(() => _isListening = false);
+                    } else {
+                      final started = await _speechService.startListening(
+                        onResultText: (text, isFinal) {
+                          if (isFinal && text.trim().isNotEmpty) {
+                            _handleVoiceCommand(text);
+                          } else {
+                            setState(() => _recognizedText = text);
+                          }
+                        },
+                      );
+                      if (started) {
+                        setState(() => _isListening = true);
+                      }
+                    }
+                  },
+              ),
               if (widget.onViewCart != null)
                 GhostButton(
                   density: ButtonDensity.icon,
@@ -63,6 +221,11 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
             ],
           ),
         ),
+        if (_recognizedText.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Text('You said: $_recognizedText', style: TextStyle(fontSize: 12, color: theme.colorScheme.mutedForeground)),
+          ),
         const SizedBox(height: 8),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),

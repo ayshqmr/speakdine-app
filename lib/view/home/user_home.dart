@@ -1,39 +1,154 @@
+import 'package:flutter/material.dart' as material;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
-import 'package:skeletonizer/skeletonizer.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:speak_dine/utils/toast_helper.dart';
-import 'package:speak_dine/widgets/notification_bell.dart';
 import 'package:speak_dine/view/authScreens/login_view.dart';
 import 'package:speak_dine/view/user/restaurant_detail.dart';
+import 'package:speak_dine/services/speech_service.dart';
+import 'package:speak_dine/services/intent_service.dart';
+import 'package:speak_dine/widgets/notification_bell.dart';
 
-class UserHomeView extends StatefulWidget {
+class UserHomeView extends material.StatefulWidget {
   final VoidCallback? onCartChanged;
   final VoidCallback? onViewCart;
+  final VoidCallback? onViewPayments;
 
-  const UserHomeView({super.key, this.onCartChanged, this.onViewCart});
+  const UserHomeView({
+    super.key,
+    this.onCartChanged,
+    this.onViewCart,
+    this.onViewPayments,
+  });
 
   @override
-  State<UserHomeView> createState() => _UserHomeViewState();
+  material.State<UserHomeView> createState() => _UserHomeViewState();
 }
 
-class _UserHomeViewState extends State<UserHomeView> {
+class _UserHomeViewState extends material.State<UserHomeView> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  String userName = 'Customer';
+
+  String userName = "Customer";
+
+  final SpeechService speechService = SpeechService();
+  final IntentService intentService = IntentService();
+
+  bool _isListening = false;
+  String _recognizedText = "";
 
   @override
   void initState() {
     super.initState();
     _loadUserData();
+    speechService.init();
   }
 
+  @override
+  void dispose() {
+    speechService.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _handleVoiceCommand(String text) async {
+    setState(() {
+      _recognizedText = text;
+      _isListening = false;
+    });
+
+    final intent = intentService.detectIntent(text);
+    bool stayedOnScreen = true;
+
+    switch (intent.action) {
+      case "OPEN_RESTAURANT":
+        await _openRestaurantByName(intent.restaurantName);
+        stayedOnScreen = false;
+        break;
+      case "SHOW_CART":
+        await speechService.speak("Opening cart");
+        widget.onViewCart?.call();
+        stayedOnScreen = false;
+        break;
+      case "PLACE_ORDER":
+        await speechService.speak("Opening cart");
+        widget.onViewCart?.call();
+        stayedOnScreen = false;
+        break;
+      case "SHOW_MENU":
+        await speechService.speak("Showing restaurants");
+        break;
+      case "MAKE_PAYMENT":
+        await speechService.speak("Opening payments");
+        widget.onViewPayments?.call();
+        stayedOnScreen = false;
+        break;
+      default:
+        await speechService.speak("Sorry, I did not understand");
+    }
+
+    if (stayedOnScreen && mounted) _restartListeningAfterDelay();
+  }
+
+  void _restartListeningAfterDelay() {
+    Future.delayed(const Duration(milliseconds: 2200), () async {
+      if (!mounted) return;
+      final started = await speechService.startListening(
+        onResultText: (text, isFinal) {
+          if (isFinal && text.trim().isNotEmpty) {
+            _handleVoiceCommand(text);
+          } else {
+            setState(() => _recognizedText = text);
+          }
+        },
+      );
+      if (started && mounted) setState(() => _isListening = true);
+    });
+  }
+
+  Future<void> _openRestaurantByName(String? name) async {
+    if (name == null || name.isEmpty) {
+      await speechService.speak("Which restaurant? Say for example, open K F C");
+      return;
+    }
+    final snapshot = await _firestore.collection('restaurants').get();
+    if (!mounted) return;
+    final docs = snapshot.docs;
+    final search = name.toLowerCase().replaceAll(' ', '');
+    QueryDocumentSnapshot<Map<String, dynamic>>? match;
+    for (final doc in docs) {
+      final data = doc.data();
+      final rName = (data['restaurantName'] as String? ?? '').toLowerCase().replaceAll(' ', '');
+      if (rName.contains(search) || search.contains(rName)) {
+        match = doc;
+        break;
+      }
+    }
+    if (match == null) {
+      await speechService.speak("Restaurant not found. Say open and then the restaurant name.");
+      return;
+    }
+    final data = match.data();
+    final restaurantName = data['restaurantName'] as String? ?? 'Restaurant';
+    await speechService.speak("Opening $restaurantName");
+    material.Navigator.push(
+      context,
+      material.MaterialPageRoute(
+        builder: (_) => RestaurantDetailView(
+          restaurantId: match!.id,
+          restaurantName: restaurantName,
+          onCartChanged: widget.onCartChanged,
+          onViewCart: widget.onViewCart,
+          onViewPayments: widget.onViewPayments,
+        ),
+      ),
+    );
+  }
   Future<void> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final doc = await _firestore.collection('users').doc(user.uid).get();
+      final doc =
+          await _firestore.collection('users').doc(user.uid).get();
       if (doc.exists && mounted) {
         setState(() {
-          userName = doc.data()?['name'] ?? 'Customer';
+          userName = doc.data()?['name'] ?? "Customer";
         });
       }
     }
@@ -42,406 +157,190 @@ class _UserHomeViewState extends State<UserHomeView> {
   Future<void> _logout() async {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
-    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginView()),
+
+    material.Navigator.pushAndRemoveUntil(
+      context,
+      material.MaterialPageRoute(builder: (_) => const LoginView()),
       (route) => false,
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  material.Widget build(material.BuildContext context) {
+    final theme = material.Theme.of(context);
+
+    return material.Column(
+      crossAxisAlignment: material.CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          child: Row(
+
+        /// HEADER
+        material.Padding(
+          padding: const material.EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: material.Row(
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              material.Expanded(
+                child: material.Column(
+                  crossAxisAlignment:
+                      material.CrossAxisAlignment.start,
                   children: [
-                    Text('Hello, $userName').h4().semiBold(),
-                    const Text('What would you like to eat?')
+                    Text("Hello, $userName").h4().semiBold(),
+                    const Text("What would you like to eat?")
                         .muted()
                         .small(),
                   ],
                 ),
               ),
               const NotificationBell(),
-              const SizedBox(width: 8),
+              const material.SizedBox(width: 8),
               GhostButton(
                 density: ButtonDensity.icon,
                 onPressed: _logout,
-                child: Icon(RadixIcons.exit,
-                    size: 20, color: theme.colorScheme.primary),
+                child: material.Icon(
+                  RadixIcons.exit,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: const Text('Restaurants Near You').semiBold(),
-        ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: _firestore.collection('restaurants').snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return _buildRestaurantListSkeleton(theme);
-              }
-              if (snapshot.hasError) {
-                debugPrint('[UserHome] Restaurants stream error: ${snapshot.error}');
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (context.mounted) {
-                    showAppToast(context, 'Unable to load restaurants. Please refresh and try again.');
+
+        const material.SizedBox(height: 20),
+
+        /// MIC SECTION
+        material.Padding(
+          padding: const material.EdgeInsets.symmetric(horizontal: 20),
+          child: material.Row(
+            children: [
+              material.IconButton(
+                icon:                     material.Icon(
+                      _isListening
+                          ? material.Icons.mic
+                          : material.Icons.mic_none,
+                ),
+                onPressed: () async {
+                  if (_isListening) {
+                    await speechService.stopListening();
+                    setState(() => _isListening = false);
+                  } else {
+                    final started =
+                        await speechService.startListening(
+                      onResultText: (text, isFinal) {
+                        if (isFinal && text.trim().isNotEmpty) {
+                          _handleVoiceCommand(text);
+                        } else {
+                          setState(() => _recognizedText = text);
+                        }
+                      },
+                    );
+
+                    if (started) setState(() => _isListening = true);
                   }
-                });
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(RadixIcons.crossCircled,
-                          size: 48,
-                          color: theme.colorScheme.destructive),
-                      const SizedBox(height: 16),
-                      const Text('Unable to load restaurants').semiBold(),
-                      const SizedBox(height: 8),
-                      const Text('Please refresh and try again')
-                          .muted()
-                          .small(),
-                    ],
-                  ),
+                },
+              ),
+              const material.SizedBox(width: 12),
+              material.Expanded(
+                child: material.Text(
+                  _recognizedText.isEmpty
+                      ? (_isListening ? "Listening... say e.g. show cart, open KFC" : "Tap mic and speak...")
+                      : "You said: $_recognizedText",
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const material.SizedBox(height: 20),
+
+        /// TITLE
+        const material.Padding(
+          padding:
+              material.EdgeInsets.symmetric(horizontal: 20),
+          child: material.Text(
+            "Restaurants Near You",
+            style: material.TextStyle(
+              fontWeight: material.FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+        ),
+
+        const material.SizedBox(height: 12),
+
+        /// RESTAURANT LIST
+        material.Expanded(
+          child: material.StreamBuilder<QuerySnapshot>(
+            stream:
+                _firestore.collection('restaurants').snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState ==
+                  material.ConnectionState.waiting) {
+                return const material.Center(
+                  child: material.CircularProgressIndicator(),
                 );
               }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(RadixIcons.home,
-                          size: 48,
-                          color: theme.colorScheme.mutedForeground),
-                      const SizedBox(height: 16),
-                      const Text('No restaurants available').muted(),
-                    ],
-                  ),
+
+              if (!snapshot.hasData ||
+                  snapshot.data!.docs.isEmpty) {
+                return const material.Center(
+                  child: material.Text(
+                      "No restaurants available"),
                 );
               }
+
               final restaurants = snapshot.data!.docs;
-              return ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+
+              return material.ListView.builder(
+                padding:
+                    const material.EdgeInsets.symmetric(
+                        horizontal: 20),
                 itemCount: restaurants.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
                 itemBuilder: (context, index) {
-                  final restaurant =
-                      restaurants[index].data() as Map<String, dynamic>;
-                  final restaurantId = restaurants[index].id;
-                  return _buildRestaurantCard(
-                      theme, restaurant, restaurantId);
+                  final data =
+                      restaurants[index].data()
+                          as Map<String, dynamic>;
+                  final restaurantId =
+                      restaurants[index].id;
+
+                  return material.Padding(
+                    padding: const material.EdgeInsets.only(
+                        bottom: 12),
+                    child: material.Card(
+                      child: material.ListTile(
+                        title: material.Text(
+                          data['restaurantName'] ??
+                              "Restaurant",
+                          style: const material.TextStyle(
+                              fontWeight:
+                                  material.FontWeight.bold),
+                        ),
+                        onTap: () {
+                          material.Navigator.push(
+                            context,
+                            material.MaterialPageRoute(
+                              builder: (_) =>
+                                  RestaurantDetailView(
+                                restaurantId: restaurantId,
+                                restaurantName:
+                                    data['restaurantName'] ??
+                                        "",
+                                onCartChanged:
+                                    widget.onCartChanged,
+                                onViewCart:
+                                    widget.onViewCart,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
                 },
               );
             },
           ),
         ),
       ],
-    );
-  }
-
-  bool _isRestaurantOpen(Map<String, dynamic> restaurant) {
-    final openTime = restaurant['openTime'] as String?;
-    final closeTime = restaurant['closeTime'] as String?;
-    if (openTime == null || closeTime == null) return true;
-
-    final now = TimeOfDay.now();
-    final open = _parseTime(openTime);
-    final close = _parseTime(closeTime);
-    if (open == null || close == null) return true;
-
-    final nowMinutes = now.hour * 60 + now.minute;
-    final openMinutes = open.hour * 60 + open.minute;
-    final closeMinutes = close.hour * 60 + close.minute;
-
-    if (closeMinutes > openMinutes) {
-      return nowMinutes >= openMinutes && nowMinutes < closeMinutes;
-    }
-    return nowMinutes >= openMinutes || nowMinutes < closeMinutes;
-  }
-
-  TimeOfDay? _parseTime(String timeStr) {
-    final match = RegExp(r'(\d{1,2}):(\d{2})\s*(AM|PM)', caseSensitive: false)
-        .firstMatch(timeStr);
-    if (match == null) return null;
-    var hour = int.parse(match.group(1)!);
-    final minute = int.parse(match.group(2)!);
-    final period = match.group(3)!.toUpperCase();
-    if (period == 'AM' && hour == 12) hour = 0;
-    if (period == 'PM' && hour != 12) hour += 12;
-    return TimeOfDay(hour: hour, minute: minute);
-  }
-
-  Widget _buildRestaurantListSkeleton(ThemeData theme) {
-    return Skeletonizer(
-      enabled: true,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        children: List.generate(
-          4,
-          (_) => Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Bone(
-                  width: double.infinity,
-                  height: 140,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-                ),
-                Card(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Bone.text(words: 2),
-                      const SizedBox(height: 8),
-                      const Bone.text(words: 4, fontSize: 12),
-                      const SizedBox(height: 8),
-                      const Bone.text(words: 3, fontSize: 11),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRestaurantCard(
-    ThemeData theme,
-    Map<String, dynamic> restaurant,
-    String restaurantId,
-  ) {
-    final coverUrl = restaurant['coverImageUrl'] as String?;
-    final name = restaurant['restaurantName'] ?? 'Restaurant';
-    final address = restaurant['address'] ?? '';
-    final avgRating = (restaurant['averageRating'] as num?)?.toDouble();
-    final totalReviews = (restaurant['totalReviews'] as int?) ?? 0;
-    final isOpen = _isRestaurantOpen(restaurant);
-    final openTime = restaurant['openTime'] as String?;
-    final closeTime = restaurant['closeTime'] as String?;
-
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RestaurantDetailView(
-              restaurantId: restaurantId,
-              restaurantName: name,
-              onCartChanged: () {
-                setState(() {});
-                widget.onCartChanged?.call();
-              },
-              onViewCart: widget.onViewCart,
-            ),
-          ),
-        ).then((_) {
-          setState(() {});
-          widget.onCartChanged?.call();
-        });
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.card,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: theme.colorScheme.primary.withValues(alpha: 0.15),
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: 140,
-              width: double.infinity,
-              child: coverUrl != null && coverUrl.isNotEmpty
-                  ? Image.network(
-                      coverUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          _coverPlaceholder(theme),
-                    )
-                  : _coverPlaceholder(theme),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(child: Text(name).semiBold()),
-                      _buildStarRating(theme, avgRating ?? 0, totalReviews),
-                    ],
-                  ),
-                  if (address.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(RadixIcons.pinTop,
-                            size: 12,
-                            color: theme.colorScheme.mutedForeground),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            address,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ).muted().small(),
-                        ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: isOpen
-                              ? Colors.green.withAlpha(25)
-                              : Colors.red.withAlpha(25),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          isOpen ? 'OPEN' : 'CLOSED',
-                          style: TextStyle(
-                            color: isOpen ? Colors.green : Colors.red,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      if (openTime != null && closeTime != null) ...[
-                        const SizedBox(width: 8),
-                        Text(
-                          '$openTime - $closeTime',
-                          style: TextStyle(
-                            color: theme.colorScheme.mutedForeground,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                      const Spacer(),
-                      _MenuCategoriesRow(
-                        restaurantId: restaurantId,
-                        theme: theme,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStarRating(ThemeData theme, double rating, int reviewCount) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ...List.generate(5, (i) {
-          final starValue = i + 1;
-          Color starColor;
-          if (rating >= starValue) {
-            starColor = Colors.amber;
-          } else if (rating >= starValue - 0.5) {
-            starColor = Colors.amber.withValues(alpha: 0.5);
-          } else {
-            starColor = theme.colorScheme.muted;
-          }
-          return Icon(RadixIcons.star, size: 14, color: starColor);
-        }),
-        if (reviewCount > 0) ...[
-          const SizedBox(width: 4),
-          Text(
-            '($reviewCount)',
-            style: TextStyle(
-              color: theme.colorScheme.mutedForeground,
-              fontSize: 11,
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _coverPlaceholder(ThemeData theme) {
-    return Container(
-      color: theme.colorScheme.primary.withValues(alpha: 0.06),
-      child: Center(
-        child: Icon(RadixIcons.home,
-            size: 40, color: theme.colorScheme.primary.withValues(alpha: 0.3)),
-      ),
-    );
-  }
-}
-
-class _MenuCategoriesRow extends StatelessWidget {
-  final String restaurantId;
-  final ThemeData theme;
-
-  const _MenuCategoriesRow({
-    required this.restaurantId,
-    required this.theme,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('restaurants')
-          .doc(restaurantId)
-          .collection('menu')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
-        final categories = snapshot.data!.docs
-            .map((doc) {
-              final data = doc.data() as Map<String, dynamic>;
-              return (data['category'] as String?) ?? '';
-            })
-            .where((c) => c.isNotEmpty)
-            .toSet()
-            .take(3)
-            .toList();
-
-        if (categories.isEmpty) return const SizedBox.shrink();
-
-        return Flexible(
-          child: Text(
-            categories.join(' · '),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: theme.colorScheme.mutedForeground,
-              fontSize: 11,
-            ),
-          ),
-        );
-      },
     );
   }
 }
