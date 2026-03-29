@@ -322,49 +322,60 @@ class _RestaurantProfileViewState extends State<RestaurantProfileView> {
     }
 
     setState(() => _uploadingRestaurantPhoto = true);
-    final url = await ImageUploadService.uploadProfileImage(
-      userId: uid,
-      imageFile: file,
-      kind: ProfileImageKind.restaurantCover,
-    );
-    if (url != null) {
-      _restaurantImageUrl = url;
-      try {
-        final ref = _firestore.collection('restaurants').doc(uid);
-        final patch = {
-          'profileImageUrl': url,
-          'coverImageUrl': url,
-          'updatedAt': FieldValue.serverTimestamp(),
-        };
-        if (_profileDocExists) {
-          await ref.update(patch);
-        } else {
-          await ref.set({
-            ...patch,
-            'uid': uid,
-            'role': 'restaurant',
-          }, SetOptions(merge: true));
-          if (mounted) setState(() => _profileDocExists = true);
+    try {
+      final url = await ImageUploadService.uploadProfileImage(
+        userId: uid,
+        imageFile: file,
+        kind: ProfileImageKind.restaurantCover,
+      );
+      if (url != null) {
+        _restaurantImageUrl = url;
+        try {
+          final ref = _firestore.collection('restaurants').doc(uid);
+          final patch = {
+            'profileImageUrl': url,
+            'coverImageUrl': url,
+            'updatedAt': FieldValue.serverTimestamp(),
+          };
+          if (_profileDocExists) {
+            await ref.update(patch);
+          } else {
+            await ref.set({
+              ...patch,
+              'uid': uid,
+              'role': 'restaurant',
+            }, SetOptions(merge: true));
+            if (mounted) setState(() => _profileDocExists = true);
+          }
+          if (mounted) showAppToast(context, 'Photo updated');
+        } catch (e) {
+          debugPrint('[RestaurantProfile] photo Firestore sync: $e');
+          if (mounted) {
+            showAppToast(
+              context,
+              'Photo uploaded but could not sync. Tap Save in Edit Profile.',
+            );
+          }
         }
-        if (mounted) showAppToast(context, 'Photo updated');
-      } catch (e) {
-        debugPrint('[RestaurantProfile] photo Firestore sync: $e');
+      } else {
         if (mounted) {
           showAppToast(
             context,
-            'Photo uploaded but could not sync. Tap Save in Edit Profile.',
+            'Photo upload failed. ${ImageUploadService.failureUserHint()}',
           );
         }
       }
-    } else {
+    } catch (e) {
+      debugPrint('[RestaurantProfile] photo upload failed: $e');
       if (mounted) {
         showAppToast(
           context,
-          'Photo upload failed. ${ImageUploadService.failureUserHint()}',
+          'Photo upload failed. Please try again.',
         );
       }
+    } finally {
+      if (mounted) setState(() => _uploadingRestaurantPhoto = false);
     }
-    if (mounted) setState(() => _uploadingRestaurantPhoto = false);
   }
 
   Future<void> _saveProfile() async {

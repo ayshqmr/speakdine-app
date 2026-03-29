@@ -133,26 +133,37 @@ class _CustomerProfileViewState extends State<CustomerProfileView> {
     if (file == null) return;
 
     setState(() => _uploadingPhoto = true);
-    final url = await ImageUploadService.uploadProfileImage(
-      userId: _user?.uid ?? '',
-      imageFile: file,
-    );
-    if (url != null) {
-      _photoUrl = url;
-      await _firestore
-          .collection('users')
-          .doc(_user?.uid)
-          .update({'photoUrl': url});
-      if (mounted) showAppToast(context, 'Photo updated');
-    } else {
+    try {
+      final url = await ImageUploadService.uploadProfileImage(
+        userId: _user?.uid ?? '',
+        imageFile: file,
+      );
+      if (url != null) {
+        _photoUrl = url;
+        await _firestore
+            .collection('users')
+            .doc(_user?.uid)
+            .update({'photoUrl': url});
+        if (mounted) showAppToast(context, 'Photo updated');
+      } else {
+        if (mounted) {
+          showAppToast(
+            context,
+            'Photo upload failed. ${ImageUploadService.failureUserHint()}',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[CustomerProfile] photo upload failed: $e');
       if (mounted) {
         showAppToast(
           context,
-          'Photo upload failed. ${ImageUploadService.failureUserHint()}',
+          'Photo upload failed. Please try again.',
         );
       }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
     }
-    if (mounted) setState(() => _uploadingPhoto = false);
   }
 
   Future<void> _saveProfile() async {

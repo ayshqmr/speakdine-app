@@ -55,7 +55,10 @@ class _UserHomeViewState extends State<UserHomeView> {
 
   void _voiceApplySearchQuery(String query) {
     if (!mounted) return;
-    setState(() => _searchController.text = query);
+    _searchController.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
   }
 
   void _voiceApplyCategoryId(String? categoryId) {
@@ -330,7 +333,6 @@ class _UserHomeViewState extends State<UserHomeView> {
                 child: SdLibRestaurantSearchFilterBar(
                   controller: _searchController,
                   theme: theme,
-                  onQueryChanged: () => setState(() {}),
                   onOpenFilters: () async {
                     final result = await showSdLibRestaurantFilterSheet(
                       context,
@@ -354,96 +356,103 @@ class _UserHomeViewState extends State<UserHomeView> {
               ],
               const SizedBox(height: 12),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore.collection('restaurants').snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return _buildRestaurantListSkeleton(theme);
-                    }
-                    if (snapshot.hasError) {
-                      debugPrint(
-                          '[UserHome] Restaurants stream error: ${snapshot.error}');
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (context.mounted) {
-                          showAppToast(
-                            context,
-                            'Unable to load restaurants. Please refresh and try again.',
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _searchController,
+                  builder: (context, value, _) {
+                    final searchQuery = value.text.trim();
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: _firestore.collection('restaurants').snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return _buildRestaurantListSkeleton(theme);
+                        }
+                        if (snapshot.hasError) {
+                          debugPrint(
+                              '[UserHome] Restaurants stream error: ${snapshot.error}');
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (context.mounted) {
+                              showAppToast(
+                                context,
+                                'Unable to load restaurants. Please refresh and try again.',
+                              );
+                            }
+                          });
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(RadixIcons.crossCircled,
+                                    size: 48,
+                                    color: theme.colorScheme.destructive),
+                                const SizedBox(height: 16),
+                                const Text('Unable to load restaurants').semiBold(),
+                                const SizedBox(height: 8),
+                                const Text('Please refresh and try again')
+                                    .muted()
+                                    .small(),
+                              ],
+                            ),
                           );
                         }
-                      });
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(RadixIcons.crossCircled,
-                                size: 48,
-                                color: theme.colorScheme.destructive),
-                            const SizedBox(height: 16),
-                            const Text('Unable to load restaurants').semiBold(),
-                            const SizedBox(height: 8),
-                            const Text('Please refresh and try again')
-                                .muted()
-                                .small(),
-                          ],
-                        ),
-                      );
-                    }
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(RadixIcons.home,
-                                size: 48,
-                                color: theme.colorScheme.mutedForeground),
-                            const SizedBox(height: 16),
-                            Text(
-                              cityDisplay.isNotEmpty
-                                  ? 'No restaurants in $cityDisplay yet'
-                                  : 'No restaurants in your area yet',
-                            ).muted(),
-                          ],
-                        ),
-                      );
-                    }
-                    final allDocs = snapshot.data!.docs;
-                    final restaurants = allDocs
-                        .where((d) => _passesExploreFilters(d, userCityKey))
-                        .toList();
-                    if (restaurants.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              RadixIcons.magnifyingGlass,
-                              size: 48,
-                              color: theme.colorScheme.mutedForeground,
+                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(RadixIcons.home,
+                                    size: 48,
+                                    color: theme.colorScheme.mutedForeground),
+                                const SizedBox(height: 16),
+                                Text(
+                                  cityDisplay.isNotEmpty
+                                      ? 'No restaurants in $cityDisplay yet'
+                                      : 'No restaurants in your area yet',
+                                ).muted(),
+                              ],
                             ),
-                            const SizedBox(height: 16),
-                            const Text('No matching restaurants').semiBold(),
-                            const SizedBox(height: 8),
-                            Text(
-                              _exploreFilters.hasActiveFilters ||
-                                      _searchController.text.trim().isNotEmpty
-                                  ? 'Try a different search or adjust filters.'
-                                  : 'No places match your city and filters.',
-                              textAlign: TextAlign.center,
-                            ).muted().small(),
-                          ],
-                        ),
-                      );
-                    }
-                    return ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: restaurants.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final restaurant = restaurants[index].data()
-                            as Map<String, dynamic>;
-                        final restaurantId = restaurants[index].id;
-                        return _buildRestaurantCard(
-                            theme, restaurant, restaurantId);
+                          );
+                        }
+                        final allDocs = snapshot.data!.docs;
+                        final restaurants = allDocs
+                            .where((d) =>
+                                _passesExploreFilters(d, userCityKey, searchQuery))
+                            .toList();
+                        if (restaurants.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  RadixIcons.magnifyingGlass,
+                                  size: 48,
+                                  color: theme.colorScheme.mutedForeground,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text('No matching restaurants').semiBold(),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _exploreFilters.hasActiveFilters ||
+                                          searchQuery.isNotEmpty
+                                      ? 'Try a different search or adjust filters.'
+                                      : 'No places match your city and filters.',
+                                  textAlign: TextAlign.center,
+                                ).muted().small(),
+                              ],
+                            ),
+                          );
+                        }
+                        return ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          itemCount: restaurants.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final restaurant = restaurants[index].data()
+                                as Map<String, dynamic>;
+                            final restaurantId = restaurants[index].id;
+                            return _buildRestaurantCard(
+                                theme, restaurant, restaurantId);
+                          },
+                        );
                       },
                     );
                   },
@@ -459,13 +468,13 @@ class _UserHomeViewState extends State<UserHomeView> {
   bool _passesExploreFilters(
     QueryDocumentSnapshot<Object?> doc,
     String? userCityKey,
+    String searchQuery,
   ) {
     final data = doc.data() as Map<String, dynamic>;
     if (!restaurantCityMatchesUserExplore(userCityKey, data)) {
       return false;
     }
-    if (!restaurantMatchesExploreSearch(
-        data, _searchController.text.trim())) {
+    if (!restaurantMatchesExploreSearch(data, searchQuery)) {
       return false;
     }
     final catFilter = _exploreFilters.categoryId;

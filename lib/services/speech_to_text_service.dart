@@ -12,10 +12,17 @@ class SpeechToTextService {
   bool get isReady => _ready;
 
   Future<bool> init() async {
-    _ready = await _stt.initialize(
-      onError: (e) => debugPrint('[SpeechToText] $e'),
-      onStatus: (s) => debugPrint('[SpeechToText] status=$s'),
-    );
+    try {
+      _ready = await _stt.initialize(
+        // Web can emit DOM Event payloads during startup/permission flow on some
+        // browser/plugin versions; avoid strict typed error callback there.
+        onError: kIsWeb ? null : (e) => debugPrint('[SpeechToText] $e'),
+        onStatus: (s) => debugPrint('[SpeechToText] status=$s'),
+      );
+    } catch (e) {
+      debugPrint('[SpeechToText] initialize failed: $e');
+      _ready = false;
+    }
     return _ready;
   }
 
@@ -32,15 +39,20 @@ class SpeechToTextService {
     }
     if (_stt.isListening) return true;
 
-    await _stt.listen(
-      localeId: localeId,
-      listenFor: listenFor,
-      pauseFor: pauseFor,
-      onResult: (result) {
-        onResultText(result.recognizedWords, result.finalResult);
-      },
-    );
-    return true;
+    try {
+      await _stt.listen(
+        localeId: localeId,
+        listenFor: listenFor,
+        pauseFor: pauseFor,
+        onResult: (result) {
+          onResultText(result.recognizedWords, result.finalResult);
+        },
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[SpeechToText] listen failed: $e');
+      return false;
+    }
   }
 
   Future<void> stopListening() async => _stt.stop();

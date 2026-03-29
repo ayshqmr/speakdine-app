@@ -37,7 +37,7 @@ dependencies:
   flutter_svg: ^2.1.0
 
   # Speech (STT/TTS) — customer voice assistant
-  speech_to_text: ^6.6.0
+  speech_to_text: ^7.3.0
   flutter_tts: ^3.8.5
   flutter_animate: ^4.5.2
 

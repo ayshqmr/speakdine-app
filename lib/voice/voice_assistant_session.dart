@@ -1,8 +1,10 @@
 import 'package:speak_dine/services/speech_to_text_service.dart';
 import 'package:speak_dine/services/text_to_speech_service.dart';
 import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/voice/gemini_intent_service.dart';
 import 'package:speak_dine/voice/voice_intent_classifier.dart';
 import 'package:speak_dine/voice/voice_intent_router.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 /// Hold-to-talk: listen while the mic is held; on release run intent + TTS once.
 class VoiceAssistantSession {
@@ -21,6 +23,7 @@ class VoiceAssistantSession {
   final TextToSpeechService _tts = TextToSpeechService();
   late final VoiceIntentRouter _router;
   final VoiceIntentClassifier _classifier = const VoiceIntentClassifier();
+  final GeminiIntentService _gemini = const GeminiIntentService();
 
   bool _initialized = false;
   bool _holding = false;
@@ -55,9 +58,12 @@ class VoiceAssistantSession {
     final started = await _stt.startListening(
       listenFor: const Duration(seconds: 60),
       pauseFor: const Duration(seconds: 10),
-      onResultText: (text, _) {
+      onResultText: (text, isFinal) {
         _latestText = text;
         bridge.userSpeechLine.value = text;
+        debugPrint(
+          '[VoiceSTT] ${isFinal ? "final" : "partial"}: ${text.trim()}',
+        );
       },
     );
     if (!started) {
@@ -76,12 +82,15 @@ class VoiceAssistantSession {
     await _stt.stopListening();
 
     final text = _latestText.trim();
+    debugPrint('[VoiceSTT] hold-end text="$text"');
     bridge.userSpeechLine.value = text;
     if (text.isEmpty) {
+      debugPrint('[VoiceSTT] no speech captured');
       return;
     }
 
-    final intent = _classifier.classify(text);
+    final intent = await _gemini.classify(text) ?? _classifier.classify(text);
+    debugPrint('[VoiceIntent] kind=${intent.kind} confidence=${intent.confidence}');
     final spoken = await _router.handle(intent);
     bridge.assistantSpeechLine.value = spoken.trim();
   }

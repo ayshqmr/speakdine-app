@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_storage/firebase_storage.dart';
@@ -11,6 +12,7 @@ enum ProfileImageKind { customerAvatar, restaurantCover, menuItem }
 
 class ImageUploadService {
   static final _picker = ImagePicker();
+  static const Duration _uploadTimeout = Duration(seconds: 10);
 
   /// Short hint for toast when [uploadMenuImage] / profile uploads return null.
   static String failureUserHint() {
@@ -86,14 +88,22 @@ class ImageUploadService {
     required String logicalName,
     required String storageFolder,
   }) async {
-    if (imgbbApiKey.trim().isNotEmpty) {
-      return _uploadToImgbb(imageFile: imageFile, imageName: logicalName);
+    try {
+      if (imgbbApiKey.trim().isNotEmpty) {
+        return await _uploadToImgbb(
+          imageFile: imageFile,
+          imageName: logicalName,
+        ).timeout(_uploadTimeout);
+      }
+      return await _uploadToFirebaseStorage(
+        ownerUid: ownerUid,
+        imageFile: imageFile,
+        storageFolder: storageFolder,
+      ).timeout(_uploadTimeout);
+    } on TimeoutException {
+      debugPrint('[ImageUpload] Timed out after ${_uploadTimeout.inSeconds}s');
+      return null;
     }
-    return _uploadToFirebaseStorage(
-      ownerUid: ownerUid,
-      imageFile: imageFile,
-      storageFolder: storageFolder,
-    );
   }
 
   static String _extensionFor(XFile file) {
@@ -183,7 +193,7 @@ class ImageUploadService {
           'image': base64Image,
           'name': imageName,
         },
-      );
+      ).timeout(_uploadTimeout);
 
       if (response.statusCode != 200) {
         debugPrint('[ImageUpload] ImgBB returned status ${response.statusCode}');

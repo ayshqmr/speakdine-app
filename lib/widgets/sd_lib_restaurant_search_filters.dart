@@ -164,14 +164,14 @@ class SdLibRestaurantSearchFilterBar extends StatefulWidget {
     super.key,
     required this.controller,
     required this.theme,
-    required this.onQueryChanged,
+    this.onQueryChanged,
     required this.onOpenFilters,
     required this.activeFilterCount,
   });
 
   final TextEditingController controller;
   final ThemeData theme;
-  final VoidCallback onQueryChanged;
+  final ValueChanged<String>? onQueryChanged;
   final VoidCallback onOpenFilters;
   final int activeFilterCount;
 
@@ -203,10 +203,13 @@ class _SdLibRestaurantSearchFilterBarState
     super.dispose();
   }
 
-  /// Drive filter UI from the same controller (typing + voice). Parent [onQueryChanged]
-  /// rebuilds this bar — do not call [setState] here: double rebuilds + layout jump when
-  /// the clear button appears caused the field to lose focus after one character.
-  void _onText() => widget.onQueryChanged();
+  /// Keep the clear button visibility in sync with text changes without forcing
+  /// a parent screen rebuild on each key press.
+  void _onText() {
+    if (!mounted) return;
+    setState(() {});
+    widget.onQueryChanged?.call(widget.controller.text);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -246,10 +249,7 @@ class _SdLibRestaurantSearchFilterBarState
                   child: widget.controller.text.isNotEmpty
                       ? GhostButton(
                           density: ButtonDensity.icon,
-                          onPressed: () {
-                            widget.controller.clear();
-                            widget.onQueryChanged();
-                          },
+                          onPressed: widget.controller.clear,
                           child: Icon(
                             RadixIcons.cross2,
                             size: 16,

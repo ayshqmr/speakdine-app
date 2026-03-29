@@ -27,3 +27,15 @@ const String loginResolveSecret = String.fromEnvironment(
   'LOGIN_RESOLVE_SECRET',
   defaultValue: '',
 );
+
+/// Gemini API key for LLM voice-intent parsing.
+const String geminiApiKey = String.fromEnvironment(
+  'GEMINI_API_KEY',
+  defaultValue: '',
+);
+
+/// Model name for Gemini API text generation.
+const String geminiModel = String.fromEnvironment(
+  'GEMINI_MODEL',
+  defaultValue: 'gemini-2.0-flash',
+);
