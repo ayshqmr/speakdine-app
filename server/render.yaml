@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: speakdine-stripe
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: APP_BASE_URL
+        sync: false

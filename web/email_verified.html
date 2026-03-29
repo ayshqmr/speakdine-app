@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Email verified — Speak Dine</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 24px;
+      text-align: center; background: #fff1f2; color: #1f2937; }
+    h1 { font-size: 1.35rem; margin-bottom: 8px; color: #be123c; }
+    p { font-size: 0.95rem; line-height: 1.45; max-width: 360px; margin: 0 auto 20px; }
+    button {
+      background: #e11d48; color: #fff; border: none; border-radius: 12px;
+      padding: 14px 28px; font-size: 1rem; font-weight: 600; cursor: pointer;
+    }
+    button:active { opacity: 0.9; }
+    .hint { font-size: 0.8rem; color: #6b7280; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Email verified</h1>
+  <p>Your email is confirmed. Open the Speak Dine app and tap
+    <strong>“I have verified my email”</strong> to finish signing up.</p>
+  <button type="button" id="openApp">Open Speak Dine</button>
+  <p class="hint">If the app does not open, switch back to it manually — we will detect verification automatically.</p>
+  <script>
+    function openSpeakDine() {
+      window.location.href = 'speakdine://email-verified';
+    }
+    document.getElementById('openApp').addEventListener('click', openSpeakDine);
+  </script>
+</body>
+</html>
