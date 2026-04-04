@@ -9,16 +9,17 @@ import 'package:speak_dine/utils/password_strength.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/widgets/auth_labeled_text_field.dart';
 import 'package:speak_dine/widgets/password_strength_indicator.dart';
-import 'package:speak_dine/services/cart_service.dart';
-import 'package:speak_dine/services/google_auth_service.dart';
-import 'package:speak_dine/view/home/customer_shell.dart';
-import 'package:speak_dine/view/home/restaurant_shell.dart';
 import 'package:speak_dine/widgets/sd_lib_restaurant_category_picker.dart';
-import 'package:speak_dine/utils/google_sign_in_guard.dart';
 import 'package:speak_dine/services/email_verification_service.dart';
 import 'package:speak_dine/services/login_lookup_sync.dart';
-import 'package:speak_dine/widgets/google_logo_mark.dart';
 import 'package:speak_dine/widgets/keyboard_friendly.dart';
+// Google sign-in (disabled): uncomment these + [_routeByRole]/[_handleGoogleSignUp] + UI after Register.
+// import 'package:speak_dine/services/cart_service.dart';
+// import 'package:speak_dine/view/home/customer_shell.dart';
+// import 'package:speak_dine/view/home/restaurant_shell.dart';
+// import 'package:speak_dine/services/google_auth_service.dart';
+// import 'package:speak_dine/utils/google_sign_in_guard.dart';
+// import 'package:speak_dine/widgets/google_logo_mark.dart';
 
 enum AccountRole { customer, restaurant }
 
@@ -334,6 +335,8 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
     showAppToast(context, message);
   }
 
+  /*
+  // GOOGLE_SIGN_IN_DISABLED — uncomment imports at top + this block + Register-button UI block.
   Future<void> _routeByRole(String uid) async {
     final restaurantDoc =
         await _firestore.collection('restaurants').doc(uid).get();
@@ -382,7 +385,6 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
         return;
       }
 
-      // If Google didn't mark email as verified for some reason, block navigation.
       if (!user.emailVerified) {
         _showMessage('Please verify your email before logging in.');
         await _auth.signOut();
@@ -396,6 +398,7 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
       if (mounted) setState(() => _loading = false);
     }
   }
+  */
 
   Future<void> _completeSignupAfterEmailVerification() async {
     setState(() => _loading = true);
@@ -840,54 +843,57 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
                                   ],
                                 ),
                               ),
-                        const SizedBox(height: 16),
-                        Row(
+                      /*
+                      // GOOGLE_SIGN_IN_DISABLED — uncomment with imports + [_handleGoogleSignUp].
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Divider(
+                              height: 1,
+                              thickness: 1,
+                            ),
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'or sign up with',
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Expanded(
+                            child: Divider(
+                              height: 1,
+                              thickness: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      OutlineButton(
+                        onPressed: _loading ? null : _handleGoogleSignUp,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Expanded(
-                              child: Divider(
-                                height: 1,
-                                thickness: 1,
-                              ),
-                            ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              child: Text(
-                                'or sign up with',
-                                style: TextStyle(
-                                  color: theme.colorScheme.primary,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            const Expanded(
-                              child: Divider(
-                                height: 1,
-                                thickness: 1,
+                            const GoogleLogoMark(size: 20),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Continue with Google',
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
-                        OutlineButton(
-                          onPressed: _loading ? null : _handleGoogleSignUp,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const GoogleLogoMark(size: 20),
-                              const SizedBox(width: 10),
-                              Text(
-                                'Continue with Google',
-                                style: TextStyle(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                      ),
+                      */
                       ],
                     ),
                   ),

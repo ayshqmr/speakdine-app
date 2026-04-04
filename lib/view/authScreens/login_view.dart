@@ -10,12 +10,13 @@ import 'package:speak_dine/view/authScreens/signup_view.dart';
 import 'package:speak_dine/view/authScreens/forgot_password_view.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/widgets/auth_labeled_text_field.dart';
-import 'package:speak_dine/services/google_auth_service.dart';
 import 'package:speak_dine/services/login_identifier_service.dart';
 import 'package:speak_dine/services/login_lookup_sync.dart';
-import 'package:speak_dine/utils/google_sign_in_guard.dart';
-import 'package:speak_dine/widgets/google_logo_mark.dart';
 import 'package:speak_dine/widgets/keyboard_friendly.dart';
+// Google sign-in (disabled): uncomment these three + [_handleGoogleSignIn] + UI block after Login.
+// import 'package:speak_dine/services/google_auth_service.dart';
+// import 'package:speak_dine/utils/google_sign_in_guard.dart';
+// import 'package:speak_dine/widgets/google_logo_mark.dart';
 import 'package:speak_dine/widgets/unverified_email_dialog.dart';
 
 class LoginView extends StatefulWidget {
@@ -99,6 +100,8 @@ class _LoginViewState extends State<LoginView> {
     }
   }
 
+  /*
+  // GOOGLE_SIGN_IN_DISABLED — uncomment imports at top of file, this method, and the UI block.
   Future<void> _handleGoogleSignIn() async {
     if (_loading) return;
     if (isGoogleSignInMissingAndroidWebClientId) {
@@ -118,7 +121,6 @@ class _LoginViewState extends State<LoginView> {
         return;
       }
 
-      // Gate routing until email is verified.
       if (!user.emailVerified) {
         if (mounted) await showUnverifiedEmailDialog(context);
         await _auth.signOut();
@@ -132,6 +134,7 @@ class _LoginViewState extends State<LoginView> {
       if (mounted) setState(() => _loading = false);
     }
   }
+  */
 
   Future<void> _routeByRole(String uid) async {
     final restaurantDoc =
@@ -435,54 +438,57 @@ class _LoginViewState extends State<LoginView> {
                                   ],
                                 ),
                               ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              const Expanded(
-                                child: Divider(
-                                  height: 1,
-                                  thickness: 1,
-                                ),
-                              ),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
-                                child: Text(
-                                  'or sign in with',
-                                  style: TextStyle(
-                                    color: theme.colorScheme.primary,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              const Expanded(
-                                child: Divider(
-                                  height: 1,
-                                  thickness: 1,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          OutlineButton(
-                            onPressed: _loading ? null : _handleGoogleSignIn,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const GoogleLogoMark(size: 20),
-                                const SizedBox(width: 10),
-                                Text(
-                                  'Continue with Google',
-                                  style: TextStyle(
-                                    color: theme.colorScheme.primary,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ],
+                      /*
+                      // GOOGLE_SIGN_IN_DISABLED — uncomment with imports + [_handleGoogleSignIn].
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Divider(
+                              height: 1,
+                              thickness: 1,
                             ),
                           ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'or sign in with',
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Expanded(
+                            child: Divider(
+                              height: 1,
+                              thickness: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      OutlineButton(
+                        onPressed: _loading ? null : _handleGoogleSignIn,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const GoogleLogoMark(size: 20),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Continue with Google',
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      */
                       ],
                     ),
                   ),
