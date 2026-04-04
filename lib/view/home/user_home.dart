@@ -6,6 +6,13 @@ import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/widgets/notification_bell.dart';
 import 'package:speak_dine/view/authScreens/login_view.dart';
 import 'package:speak_dine/view/user/restaurant_detail.dart';
+import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
+import 'package:speak_dine/utils/restaurant_hours.dart';
+import 'package:speak_dine/widgets/sd_lib_restaurant_search_filters.dart';
+import 'package:speak_dine/utils/city_normalize.dart';
+import 'package:speak_dine/services/cart_service.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/voice/voice_intent_router.dart';
 
 class UserHomeView extends StatefulWidget {
   final VoidCallback? onCartChanged;
@@ -17,40 +24,233 @@ class UserHomeView extends StatefulWidget {
   State<UserHomeView> createState() => _UserHomeViewState();
 }
 
-const _filterCategories = [
-  'All',
-  'Appetizers', 'Bakery', 'BBQ & Grills', 'Beverages', 'Biryani & Rice',
-  'Breakfast', 'Burgers', 'Chinese', 'Desi', 'Desserts', 'Fast Food',
-  'Healthy', 'Italian', 'Japanese', 'Mexican', 'Pasta', 'Pizza', 'Salads',
-  'Sandwiches', 'Seafood', 'Sides', 'Soups', 'Steaks', 'Sushi', 'Thai',
-  'Wraps', 'Other',
-];
-
 class _UserHomeViewState extends State<UserHomeView> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  String userName = 'Customer';
-  String _selectedCategory = 'All';
-  Map<String, Set<String>> _restaurantCategories = {};
+  final TextEditingController _searchController = TextEditingController();
+  SdLibRestaurantExploreFilters _exploreFilters =
+      const SdLibRestaurantExploreFilters();
+  /// Voice / explore sort: default | rating | price_low | price_high | name
+  String _voiceSortKey = 'default';
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    final bridge = CustomerVoiceBridge.instance;
+    bridge.applySearchQuery = _voiceApplySearchQuery;
+    bridge.applyCategoryId = _voiceApplyCategoryId;
+    bridge.openRestaurantByName = _voiceOpenRestaurantByName;
+    bridge.openExploreFilters = _voiceOpenExploreFilters;
+    bridge.applyRestaurantSort = _voiceApplySortKey;
   }
 
-  Future<void> _loadUserData() async {
+  @override
+  void dispose() {
+    final bridge = CustomerVoiceBridge.instance;
+    if (bridge.applySearchQuery == _voiceApplySearchQuery) {
+      bridge.applySearchQuery = null;
+    }
+    if (bridge.applyCategoryId == _voiceApplyCategoryId) {
+      bridge.applyCategoryId = null;
+    }
+    if (bridge.openRestaurantByName == _voiceOpenRestaurantByName) {
+      bridge.openRestaurantByName = null;
+    }
+    if (bridge.openExploreFilters == _voiceOpenExploreFilters) {
+      bridge.openExploreFilters = null;
+    }
+    if (bridge.applyRestaurantSort == _voiceApplySortKey) {
+      bridge.applyRestaurantSort = null;
+    }
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Voice must not await the sheet — otherwise TTS waits until the sheet closes.
+  Future<void> _voiceOpenExploreFilters() async {
+    if (!mounted) {
+      return;
+    }
+    final theme = Theme.of(context);
+    showSdLibRestaurantFilterSheet(
+      context,
+      theme: theme,
+      initial: _exploreFilters,
+    ).then((result) {
+      if (result != null && mounted) {
+        setState(() => _exploreFilters = result);
+      }
+    });
+  }
+
+  void _voiceApplySortKey(String rawKey) {
+    if (!mounted) {
+      return;
+    }
+    final k = rawKey.toLowerCase().trim();
+    setState(() {
+      if (k.contains('rating')) {
+        _voiceSortKey = 'rating';
+      } else if (k.contains('price_high') || k.contains('expensive')) {
+        _voiceSortKey = 'price_high';
+      } else if (k.contains('price_low') ||
+          k.contains('cheap') ||
+          (k.contains('price') && !k.contains('high'))) {
+        _voiceSortKey = 'price_low';
+      } else if (k.contains('name') || k.contains('alphabet')) {
+        _voiceSortKey = 'name';
+      } else {
+        _voiceSortKey = 'default';
+      }
+    });
+  }
+
+  List<QueryDocumentSnapshot<Object?>> _sortRestaurantDocs(
+    List<QueryDocumentSnapshot<Object?>> docs,
+  ) {
+    if (_voiceSortKey == 'default') {
+      return docs;
+    }
+    final copy = List<QueryDocumentSnapshot<Object?>>.from(docs);
+    double ratingOf(QueryDocumentSnapshot<Object?> d) {
+      return ((d.data() as Map<String, dynamic>)['averageRating'] as num?)
+              ?.toDouble() ??
+          0;
+    }
+
+    String nameOf(QueryDocumentSnapshot<Object?> d) {
+      final m = d.data() as Map<String, dynamic>;
+      return (m['restaurantName'] ?? m['name'] ?? '').toString().toLowerCase();
+    }
+
+    switch (_voiceSortKey) {
+      case 'rating':
+        copy.sort((a, b) => ratingOf(b).compareTo(ratingOf(a)));
+      case 'price_low':
+        copy.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+      case 'price_high':
+        copy.sort((a, b) => nameOf(b).compareTo(nameOf(a)));
+      case 'name':
+        copy.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+      default:
+        break;
+    }
+    return copy;
+  }
+
+  void _voiceApplySearchQuery(String query) {
+    if (!mounted) return;
+    final trimmed = query.trim();
+    final cleaned =
+        VoiceIntentRouter.normalizeExploreSearchQuery(trimmed) ?? trimmed;
+    _searchController.value = TextEditingValue(
+      text: cleaned,
+      selection: TextSelection.collapsed(offset: cleaned.length),
+    );
+  }
+
+  void _voiceApplyCategoryId(String? categoryId) {
+    if (!mounted) return;
+    setState(() {
+      _exploreFilters = SdLibRestaurantExploreFilters(
+        categoryId: categoryId,
+        openNowOnly: true,
+      );
+    });
+  }
+
+  Future<bool> _voiceOpenRestaurantByName(String rawName) async {
+    final nameNeedle = rawName.toLowerCase().trim();
+    if (nameNeedle.isEmpty) return false;
+
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final doc = await _firestore.collection('users').doc(user.uid).get();
-      if (doc.exists && mounted) {
-        setState(() {
-          userName = doc.data()?['name'] ?? 'Customer';
-        });
+    if (user == null || !mounted) return false;
+
+    final userSnap = await _firestore.collection('users').doc(user.uid).get();
+    final userCityKey = normalizeCityKey(userSnap.data()?['city'] as String?);
+    if (userCityKey == null) {
+      if (mounted) {
+        showAppToast(context, 'Set your city in Profile to find restaurants.');
+      }
+      return false;
+    }
+
+    final snap = await _firestore.collection('restaurants').get();
+    String? bestId;
+    String bestDisplayName = '';
+    var bestScore = -1;
+
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      if (!restaurantCityMatchesUserExplore(userCityKey, data)) continue;
+      final rName = (data['restaurantName'] ??
+              data['name'] ??
+              data['businessName'] ??
+              data['signInRestaurantName'] ??
+              '')
+          .toString();
+      final lower = rName.toLowerCase();
+      final lowerAlnum = exploreSearchAlnumLower(lower);
+      final needleAlnum = exploreSearchAlnumLower(nameNeedle);
+      var score = 0;
+      if (lower == nameNeedle) {
+        score = 100;
+      } else if (lower.contains(nameNeedle)) {
+        score = 80;
+      } else if (needleAlnum.length >= 2 &&
+          lowerAlnum == needleAlnum) {
+        score = 95;
+      } else if (needleAlnum.length >= 2 &&
+          lowerAlnum.contains(needleAlnum)) {
+        score = 85;
+      } else if (nameNeedle.contains(lower.split(' ').first) &&
+          lower.split(' ').first.length > 2) {
+        score = 60;
+      } else {
+        final tokens = nameNeedle.split(RegExp(r'\s+'));
+        for (final t in tokens) {
+          if (t.length > 2 && lower.contains(t)) score = 70;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = doc.id;
+        bestDisplayName = rName.isNotEmpty ? rName : 'Restaurant';
       }
     }
+
+    if (bestId == null || bestScore < 60 || !mounted) {
+      if (mounted) {
+        showAppToast(context, 'No restaurant matched "$rawName".');
+      }
+      return false;
+    }
+
+    final id = bestId;
+
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RestaurantDetailView(
+          restaurantId: id,
+          restaurantName: bestDisplayName,
+          onCartChanged: () {
+            if (!mounted) return;
+            setState(() {});
+            widget.onCartChanged?.call();
+          },
+          onViewCart: widget.onViewCart,
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+      widget.onCartChanged?.call();
+    }
+    return true;
   }
 
   Future<void> _logout() async {
+    await cartService.clearSessionForSignOut();
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -62,182 +262,329 @@ class _UserHomeViewState extends State<UserHomeView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Hello, $userName',
-                        style: TextStyle(color: theme.colorScheme.primary))
-                        .h4().semiBold(),
-                    const Text('What would you like to eat?')
-                        .muted()
-                        .small(),
-                  ],
-                ),
-              ),
-              const NotificationBell(),
-              const SizedBox(width: 8),
-              GhostButton(
-                density: ButtonDensity.icon,
-                onPressed: _logout,
-                child: Icon(RadixIcons.exit,
-                    size: 20, color: theme.colorScheme.primary),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: const Text('Restaurants Near You').semiBold(),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 34,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            itemCount: _filterCategories.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final cat = _filterCategories[index];
-              final isSelected = cat == _selectedCategory;
-              return GestureDetector(
-                onTap: () => setState(() => _selectedCategory = cat),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(20),
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const SizedBox.shrink();
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _firestore.collection('users').doc(user.uid).snapshots(),
+      builder: (context, userSnap) {
+        final userWaiting =
+            userSnap.connectionState == ConnectionState.waiting;
+        final userData = userSnap.data?.data();
+        final displayName = (userData?['name'] as String?)?.trim();
+        final helloName =
+            (displayName != null && displayName.isNotEmpty) ? displayName : 'Customer';
+        final userCityKey = normalizeCityKey(userData?['city'] as String?);
+        final cityDisplay = (userData?['city'] as String?)?.trim() ?? '';
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Hello, $helloName').h4().semiBold(),
+                        const Text('What would you like to eat?')
+                            .muted()
+                            .small(),
+                      ],
+                    ),
                   ),
-                  child: Text(
-                    cat,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : theme.colorScheme.primary,
-                      fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                      height: 1,
+                  const NotificationBell(),
+                  const SizedBox(width: 8),
+                  GhostButton(
+                    density: ButtonDensity.icon,
+                    onPressed: _logout,
+                    child: Icon(RadixIcons.exit,
+                        size: 20, color: theme.colorScheme.primary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: ValueListenableBuilder<String>(
+                valueListenable: CustomerVoiceBridge.instance.userSpeechLine,
+                builder: (context, userText, _) {
+                  return ValueListenableBuilder<String>(
+                    valueListenable:
+                        CustomerVoiceBridge.instance.assistantSpeechLine,
+                    builder: (context, asstText, __) {
+                      if (userText.isEmpty && asstText.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.card,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: theme.colorScheme.primary
+                                  .withValues(alpha: 0.22),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (userText.isNotEmpty) ...[
+                                Text(
+                                  'You',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: theme.colorScheme.mutedForeground,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  userText,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.35,
+                                    color: theme.colorScheme.foreground,
+                                  ),
+                                ),
+                              ],
+                              if (userText.isNotEmpty && asstText.isNotEmpty)
+                                const SizedBox(height: 10),
+                              if (asstText.isNotEmpty) ...[
+                                Text(
+                                  'Assistant',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: theme.colorScheme.mutedForeground,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  asstText,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.35,
+                                    color: theme.colorScheme.foreground,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: userCityKey != null
+                  ? Text(
+                      cityDisplay.isNotEmpty
+                          ? 'Restaurants in $cityDisplay'
+                          : 'Restaurants near you',
+                    ).semiBold()
+                  : const Text('Restaurants near you').semiBold(),
+            ),
+            const SizedBox(height: 10),
+            if (userWaiting)
+              Expanded(child: _buildRestaurantListSkeleton(theme))
+            else if (userCityKey == null)
+              Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          RadixIcons.pinTop,
+                          size: 48,
+                          color: theme.colorScheme.mutedForeground,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('Set your city').semiBold(),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Add your city in Profile so we can show restaurants in your area. It should match how restaurants list their city.',
+                          textAlign: TextAlign.center,
+                        ).muted().small(),
+                      ],
                     ),
                   ),
                 ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: _firestore.collection('restaurants').snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return _buildRestaurantListSkeleton(theme);
-              }
-              if (snapshot.hasError) {
-                debugPrint('[UserHome] Restaurants stream error: ${snapshot.error}');
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (context.mounted) {
-                    showAppToast(context, 'Unable to load restaurants. Please refresh and try again.', isError: true);
-                  }
-                });
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(RadixIcons.crossCircled,
-                          size: 48,
-                          color: theme.colorScheme.destructive),
-                      const SizedBox(height: 16),
-                      const Text('Unable to load restaurants').semiBold(),
-                      const SizedBox(height: 8),
-                      const Text('Please refresh and try again')
-                          .muted()
-                          .small(),
-                    ],
-                  ),
-                );
-              }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(RadixIcons.home,
-                          size: 48,
-                          color: theme.colorScheme.mutedForeground),
-                      const SizedBox(height: 16),
-                      const Text('No restaurants available').muted(),
-                    ],
-                  ),
-                );
-              }
-              final restaurants = snapshot.data!.docs;
-              if (_selectedCategory == 'All') {
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: restaurants.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final restaurant =
-                        restaurants[index].data() as Map<String, dynamic>;
-                    final restaurantId = restaurants[index].id;
-                    return _buildRestaurantCard(
-                        theme, restaurant, restaurantId);
+              )
+            else ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: SdLibRestaurantSearchFilterBar(
+                  controller: _searchController,
+                  theme: theme,
+                  onOpenFilters: () async {
+                    final result = await showSdLibRestaurantFilterSheet(
+                      context,
+                      theme: theme,
+                      initial: _exploreFilters,
+                    );
+                    if (result != null && mounted) {
+                      setState(() => _exploreFilters = result);
+                    }
                   },
-                );
-              }
-              return _FilteredRestaurantList(
-                restaurants: restaurants,
-                selectedCategory: _selectedCategory,
-                theme: theme,
-                buildCard: _buildRestaurantCard,
-              );
-            },
-          ),
-        ),
-      ],
+                  activeFilterCount: _exploreFilters.activeCount,
+                ),
+              ),
+              if (_exploreFilters.hasActiveFilters) ...[
+                const SizedBox(height: 10),
+                SdLibRestaurantFilterStrip(
+                  theme: theme,
+                  filters: _exploreFilters,
+                  onChanged: (f) => setState(() => _exploreFilters = f),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Expanded(
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _searchController,
+                  builder: (context, value, _) {
+                    final searchQuery = value.text.trim();
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: _firestore.collection('restaurants').snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return _buildRestaurantListSkeleton(theme);
+                        }
+                        if (snapshot.hasError) {
+                          debugPrint(
+                              '[UserHome] Restaurants stream error: ${snapshot.error}');
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (context.mounted) {
+                              showAppToast(
+                                context,
+                                'Unable to load restaurants. Please refresh and try again.',
+                              );
+                            }
+                          });
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(RadixIcons.crossCircled,
+                                    size: 48,
+                                    color: theme.colorScheme.destructive),
+                                const SizedBox(height: 16),
+                                const Text('Unable to load restaurants').semiBold(),
+                                const SizedBox(height: 8),
+                                const Text('Please refresh and try again')
+                                    .muted()
+                                    .small(),
+                              ],
+                            ),
+                          );
+                        }
+                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(RadixIcons.home,
+                                    size: 48,
+                                    color: theme.colorScheme.mutedForeground),
+                                const SizedBox(height: 16),
+                                Text(
+                                  cityDisplay.isNotEmpty
+                                      ? 'No restaurants in $cityDisplay yet'
+                                      : 'No restaurants in your area yet',
+                                ).muted(),
+                              ],
+                            ),
+                          );
+                        }
+                        final allDocs = snapshot.data!.docs;
+                        final restaurants = allDocs
+                            .where((d) =>
+                                _passesExploreFilters(d, userCityKey, searchQuery))
+                            .toList();
+                        final sortedRestaurants =
+                            _sortRestaurantDocs(restaurants);
+                        if (sortedRestaurants.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  RadixIcons.magnifyingGlass,
+                                  size: 48,
+                                  color: theme.colorScheme.mutedForeground,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text('No matching restaurants').semiBold(),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _exploreFilters.hasActiveFilters ||
+                                          searchQuery.isNotEmpty
+                                      ? 'Try a different search or adjust filters.'
+                                      : 'No places match your city and filters.',
+                                  textAlign: TextAlign.center,
+                                ).muted().small(),
+                              ],
+                            ),
+                          );
+                        }
+                        return ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          itemCount: sortedRestaurants.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final restaurant = sortedRestaurants[index].data()
+                                as Map<String, dynamic>;
+                            final restaurantId = sortedRestaurants[index].id;
+                            return _buildRestaurantCard(
+                                theme, restaurant, restaurantId);
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 
-  bool _isRestaurantOpen(Map<String, dynamic> restaurant) {
-    final openTime = restaurant['openTime'] as String?;
-    final closeTime = restaurant['closeTime'] as String?;
-    if (openTime == null || closeTime == null) return true;
-
-    final now = TimeOfDay.now();
-    final open = _parseTime(openTime);
-    final close = _parseTime(closeTime);
-    if (open == null || close == null) return true;
-
-    final nowMinutes = now.hour * 60 + now.minute;
-    final openMinutes = open.hour * 60 + open.minute;
-    final closeMinutes = close.hour * 60 + close.minute;
-
-    if (closeMinutes > openMinutes) {
-      return nowMinutes >= openMinutes && nowMinutes < closeMinutes;
+  bool _passesExploreFilters(
+    QueryDocumentSnapshot<Object?> doc,
+    String? userCityKey,
+    String searchQuery,
+  ) {
+    final data = doc.data() as Map<String, dynamic>;
+    if (!restaurantCityMatchesUserExplore(userCityKey, data)) {
+      return false;
     }
-    return nowMinutes >= openMinutes || nowMinutes < closeMinutes;
-  }
-
-  TimeOfDay? _parseTime(String timeStr) {
-    final match = RegExp(r'(\d{1,2}):(\d{2})\s*(AM|PM)', caseSensitive: false)
-        .firstMatch(timeStr);
-    if (match == null) return null;
-    var hour = int.parse(match.group(1)!);
-    final minute = int.parse(match.group(2)!);
-    final period = match.group(3)!.toUpperCase();
-    if (period == 'AM' && hour == 12) hour = 0;
-    if (period == 'PM' && hour != 12) hour += 12;
-    return TimeOfDay(hour: hour, minute: minute);
+    if (!restaurantMatchesExploreSearch(data, searchQuery)) {
+      return false;
+    }
+    final catFilter = _exploreFilters.categoryId;
+    if (catFilter != null) {
+      final cat = data['restaurantCategory'] as String?;
+      if (cat != catFilter) return false;
+    }
+    if (_exploreFilters.openNowOnly && !isRestaurantOpenNow(data)) {
+      return false;
+    }
+    return true;
   }
 
   Widget _buildRestaurantListSkeleton(ThemeData theme) {
@@ -283,12 +630,18 @@ class _UserHomeViewState extends State<UserHomeView> {
     Map<String, dynamic> restaurant,
     String restaurantId,
   ) {
-    final coverUrl = restaurant['coverImageUrl'] as String?;
+    final coverRaw = restaurant['coverImageUrl'] as String?;
+    final profileRaw = restaurant['profileImageUrl'] as String?;
+    final cardImageUrl = (coverRaw != null && coverRaw.trim().isNotEmpty)
+        ? coverRaw.trim()
+        : (profileRaw != null && profileRaw.trim().isNotEmpty
+            ? profileRaw.trim()
+            : null);
     final name = restaurant['restaurantName'] ?? 'Restaurant';
     final address = restaurant['address'] ?? '';
     final avgRating = (restaurant['averageRating'] as num?)?.toDouble();
     final totalReviews = (restaurant['totalReviews'] as int?) ?? 0;
-    final isOpen = _isRestaurantOpen(restaurant);
+    final isOpen = isRestaurantOpenNow(restaurant);
     final openTime = restaurant['openTime'] as String?;
     final closeTime = restaurant['closeTime'] as String?;
 
@@ -327,9 +680,9 @@ class _UserHomeViewState extends State<UserHomeView> {
             SizedBox(
               height: 140,
               width: double.infinity,
-              child: coverUrl != null && coverUrl.isNotEmpty
+              child: cardImageUrl != null
                   ? Image.network(
-                      coverUrl,
+                      cardImageUrl,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) =>
                           _coverPlaceholder(theme),
@@ -397,8 +750,9 @@ class _UserHomeViewState extends State<UserHomeView> {
                         ),
                       ],
                       const Spacer(),
-                      _MenuCategoriesRow(
-                        restaurantId: restaurantId,
+                      _RestaurantSdLibCategoryBadge(
+                        categoryId:
+                            restaurant['restaurantCategory'] as String?,
                         theme: theme,
                       ),
                     ],
@@ -453,119 +807,42 @@ class _UserHomeViewState extends State<UserHomeView> {
   }
 }
 
-class _FilteredRestaurantList extends StatelessWidget {
-  final List<QueryDocumentSnapshot> restaurants;
-  final String selectedCategory;
-  final ThemeData theme;
-  final Widget Function(ThemeData, Map<String, dynamic>, String) buildCard;
-
-  const _FilteredRestaurantList({
-    required this.restaurants,
-    required this.selectedCategory,
-    required this.theme,
-    required this.buildCard,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<QueryDocumentSnapshot>>(
-      future: _filterByCategory(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final filtered = snapshot.data!;
-        if (filtered.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(RadixIcons.magnifyingGlass,
-                    size: 48, color: theme.colorScheme.mutedForeground),
-                const SizedBox(height: 16),
-                Text('No restaurants offer $selectedCategory').muted(),
-              ],
-            ),
-          );
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          itemCount: filtered.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            final restaurant = filtered[index].data() as Map<String, dynamic>;
-            final restaurantId = filtered[index].id;
-            return buildCard(theme, restaurant, restaurantId);
-          },
-        );
-      },
-    );
-  }
-
-  Future<List<QueryDocumentSnapshot>> _filterByCategory() async {
-    final results = <QueryDocumentSnapshot>[];
-    for (final doc in restaurants) {
-      final menuSnap = await FirebaseFirestore.instance
-          .collection('restaurants')
-          .doc(doc.id)
-          .collection('menu')
-          .where('category', isEqualTo: selectedCategory)
-          .limit(1)
-          .get();
-      if (menuSnap.docs.isNotEmpty) {
-        results.add(doc);
-      }
-    }
-    return results;
-  }
-}
-
-class _MenuCategoriesRow extends StatelessWidget {
-  final String restaurantId;
+/// SD-lib: shows the restaurant's registered category (not menu tags).
+class _RestaurantSdLibCategoryBadge extends StatelessWidget {
+  final String? categoryId;
   final ThemeData theme;
 
-  const _MenuCategoriesRow({
-    required this.restaurantId,
+  const _RestaurantSdLibCategoryBadge({
+    required this.categoryId,
     required this.theme,
   });
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('restaurants')
-          .doc(restaurantId)
-          .collection('menu')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const SizedBox.shrink();
-        }
+    final label = sdLibRestaurantCategoryLabel(categoryId);
+    if (label == null) return const SizedBox.shrink();
 
-        final categories = snapshot.data!.docs
-            .map((doc) {
-              final data = doc.data() as Map<String, dynamic>;
-              return (data['category'] as String?) ?? '';
-            })
-            .where((c) => c.isNotEmpty)
-            .toSet()
-            .take(3)
-            .toList();
-
-        if (categories.isEmpty) return const SizedBox.shrink();
-
-        return Flexible(
-          child: Text(
-            categories.join(' · '),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: theme.colorScheme.mutedForeground,
-              fontSize: 11,
-            ),
+    return Flexible(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primary.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: 0.25),
           ),
-        );
-      },
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: theme.colorScheme.primary,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
     );
   }
 }

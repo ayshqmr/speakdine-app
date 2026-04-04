@@ -3,11 +3,18 @@ import 'package:skeletonizer/skeletonizer.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
-import 'package:speak_dine/services/payment_service.dart';
 import 'package:speak_dine/view/user/order_tracking_view.dart';
 import 'package:speak_dine/view/user/review_dialog.dart';
+import 'package:speak_dine/utils/pkr_format.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
 
-const _activeStatuses = {'pending', 'accepted', 'in_kitchen', 'handed_to_rider', 'on_the_way'};
+const _activeStatuses = {
+  'pending',
+  'accepted',
+  'in_kitchen',
+  'handed_to_rider',
+  'on_the_way',
+};
 
 const _statusDisplayLabels = {
   'pending': 'Pending',
@@ -18,74 +25,12 @@ const _statusDisplayLabels = {
   'delivered': 'Delivered',
 };
 
-class CustomerOrdersView extends StatefulWidget {
-  const CustomerOrdersView({super.key});
+class CustomerOrdersView extends StatelessWidget {
+  /// When opened from Profile (pushed route), show a back control. The Orders tab
+  /// uses [showBackButton] false — same widget, embedded in [CustomerShell].
+  const CustomerOrdersView({super.key, this.showBackButton = false});
 
-  @override
-  State<CustomerOrdersView> createState() => _CustomerOrdersViewState();
-}
-
-class _CustomerOrdersViewState extends State<CustomerOrdersView>
-    with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _verifyPendingPayments();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _verifyPendingPayments();
-    }
-  }
-
-  Future<void> _verifyPendingPayments() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('orders')
-        .where('paymentStatus', isEqualTo: 'pending')
-        .where('paymentMethod', isEqualTo: 'online')
-        .get();
-
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
-      final sessionId = data['stripeSessionId'] as String?;
-      if (sessionId == null) continue;
-
-      final paid = await PaymentService.verifyCheckoutSession(sessionId);
-      if (paid) {
-        await doc.reference.update({
-          'paymentStatus': 'paid',
-          'status': 'pending',
-        });
-        final restaurantOrderId = data['restaurantOrderId'] as String?;
-        final restaurantId = data['restaurantId'] as String?;
-        if (restaurantOrderId != null && restaurantId != null) {
-          await FirebaseFirestore.instance
-              .collection('restaurants')
-              .doc(restaurantId)
-              .collection('orders')
-              .doc(restaurantOrderId)
-              .update({
-            'paymentStatus': 'paid',
-            'status': 'pending',
-          });
-        }
-      }
-    }
-  }
+  final bool showBackButton;
 
   @override
   Widget build(BuildContext context) {
@@ -96,14 +41,27 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          child: Column(
+          padding: EdgeInsets.fromLTRB(showBackButton ? 4 : 20, 16, 20, 0),
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('My Orders').h4().semiBold(),
-              const Text('Track and review your past orders')
-                  .muted()
-                  .small(),
+              if (showBackButton) ...[
+                GhostButton(
+                  density: ButtonDensity.compact,
+                  onPressed: () => Navigator.pop(context),
+                  child: const Icon(RadixIcons.arrowLeft, size: 16),
+                ),
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('My Orders').h4().semiBold(),
+                    const Text('Track and review your past orders').muted().small(),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -121,19 +79,26 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
                 return _buildSkeleton();
               }
               if (snapshot.hasError) {
-                debugPrint('[CustomerOrders] Orders stream error: ${snapshot.error}');
+                debugPrint(
+                  '[CustomerOrders] Orders stream error: ${snapshot.error}',
+                );
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (context.mounted) {
-                    showAppToast(context, 'Unable to load orders. Please try again.', isError: true);
+                    showAppToast(
+                      context,
+                      'Unable to load orders. Please try again.',
+                    );
                   }
                 });
                 return Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(RadixIcons.crossCircled,
-                          size: 48,
-                          color: theme.colorScheme.destructive),
+                      Icon(
+                        RadixIcons.crossCircled,
+                        size: 48,
+                        color: theme.colorScheme.destructive,
+                      ),
                       const SizedBox(height: 16),
                       const Text('Unable to load orders').semiBold(),
                     ],
@@ -141,24 +106,59 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
                 );
               }
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                CustomerVoiceBridge.instance.openPendingReviewDialog = null;
                 return Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(RadixIcons.archive,
-                          size: 48,
-                          color: theme.colorScheme.mutedForeground),
+                      Icon(
+                        RadixIcons.archive,
+                        size: 48,
+                        color: theme.colorScheme.mutedForeground,
+                      ),
                       const SizedBox(height: 16),
                       const Text('No orders yet').semiBold(),
                       const SizedBox(height: 8),
-                      const Text('Your order history will appear here')
-                          .muted()
-                          .small(),
+                      const Text(
+                        'Your order history will appear here',
+                      ).muted().small(),
                     ],
                   ),
                 );
               }
               final orders = snapshot.data!.docs;
+              final pendingReviewDoc = orders
+                  .cast<QueryDocumentSnapshot>()
+                  .firstWhere((doc) {
+                    final order = doc.data() as Map<String, dynamic>;
+                    final isDelivered =
+                        (order['status'] as String? ?? '') == 'delivered';
+                    final reviewed = order['reviewed'] == true;
+                    return isDelivered && !reviewed;
+                  }, orElse: () => orders.first);
+              final pendingData =
+                  pendingReviewDoc.data() as Map<String, dynamic>;
+              final hasPendingReview =
+                  (pendingData['status'] as String? ?? '') == 'delivered' &&
+                  pendingData['reviewed'] != true;
+
+              CustomerVoiceBridge.instance.openPendingReviewDialog =
+                  hasPendingReview
+                  ? () async {
+                      showReviewDialog(
+                        context,
+                        restaurantId: pendingData['restaurantId'] ?? '',
+                        restaurantName:
+                            pendingData['restaurantName'] ?? 'Restaurant',
+                        orderId: pendingReviewDoc.id,
+                        customerId: user?.uid ?? '',
+                        customerName: pendingData['customerName'] ?? 'Customer',
+                      );
+                      return null;
+                    }
+                  : () async =>
+                        'You do not have any delivered order pending review.';
+
               return ListView.separated(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 itemCount: orders.length,
@@ -204,12 +204,16 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, ThemeData theme,
-      Map<String, dynamic> order, String orderId, User? user) {
+  Widget _buildOrderCard(
+    BuildContext context,
+    ThemeData theme,
+    Map<String, dynamic> order,
+    String orderId,
+    User? user,
+  ) {
     final status = order['status'] as String? ?? 'pending';
     final restaurantName = order['restaurantName'] ?? 'Restaurant';
     final itemCount = order['itemCount'] ?? 0;
-    final total = order['total']?.toStringAsFixed(2) ?? '0.00';
     final isActive = _activeStatuses.contains(status);
     final isDelivered = status == 'delivered';
     final reviewed = order['reviewed'] == true;
@@ -252,13 +256,16 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
             const SizedBox(height: 10),
             Row(
               children: [
-                Icon(RadixIcons.archive,
-                    size: 14, color: theme.colorScheme.mutedForeground),
+                Icon(
+                  RadixIcons.archive,
+                  size: 14,
+                  color: theme.colorScheme.mutedForeground,
+                ),
                 const SizedBox(width: 6),
                 Text('$itemCount items').muted().small(),
                 const Spacer(),
                 Text(
-                  '$total PKR',
+                  formatPkr(order['total']),
                   style: TextStyle(
                     color: theme.colorScheme.primary,
                     fontWeight: FontWeight.w700,
@@ -270,8 +277,11 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Icon(RadixIcons.arrowRight,
-                      size: 12, color: theme.colorScheme.primary),
+                  Icon(
+                    RadixIcons.arrowRight,
+                    size: 12,
+                    color: theme.colorScheme.primary,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'Tap to track',
@@ -303,11 +313,51 @@ class _CustomerOrdersViewState extends State<CustomerOrdersView>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(RadixIcons.star, size: 14, color: theme.colorScheme.primary),
+                      Icon(
+                        RadixIcons.star,
+                        size: 14,
+                        color: theme.colorScheme.primary,
+                      ),
                       const SizedBox(width: 6),
                       const Text('Rate & Review'),
                     ],
                   ),
+                ),
+              ),
+            ],
+            if (isDelivered && reviewed) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  vertical: 10,
+                  horizontal: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.22),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      RadixIcons.checkCircled,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Reviewed',
+                      style: TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

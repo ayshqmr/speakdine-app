@@ -1,16 +1,28 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
+import 'package:speak_dine/utils/city_normalize.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 
 /// Default center: Lahore, Pakistan
 const _defaultLat = 31.5204;
 const _defaultLng = 74.3587;
 
-/// A reusable widget for picking a location on an OpenStreetMap map.
-/// Works inside a dialog or full page.
+/// Picked map point: coordinates, formatted address line, and best-effort city for discovery filters.
+typedef OnLocationSelectedCallback = void Function(
+  double lat,
+  double lng,
+  String address,
+  String? inferredCity,
+);
+
+/// A reusable widget for picking a location on a map.
+/// Address text uses Nominatim reverse geocoding with English (`accept-language=en`).
+/// Basemap uses Carto Light for Latin-script labels (English-oriented).
 class LocationPicker extends StatefulWidget {
   const LocationPicker({
     super.key,
@@ -21,7 +33,7 @@ class LocationPicker extends StatefulWidget {
 
   final double? initialLat;
   final double? initialLng;
-  final void Function(double lat, double lng, String address) onLocationSelected;
+  final OnLocationSelectedCallback onLocationSelected;
 
   @override
   State<LocationPicker> createState() => _LocationPickerState();
@@ -31,8 +43,10 @@ class _LocationPickerState extends State<LocationPicker> {
   late MapController _mapController;
   late LatLng _selectedPoint;
   String _address = '';
+  String? _inferredCity;
   bool _loadingAddress = false;
   bool _loadingMyLocation = false;
+  int _geocodeGeneration = 0;
 
   @override
   void initState() {
@@ -45,39 +59,125 @@ class _LocationPickerState extends State<LocationPicker> {
     _reverseGeocode(_selectedPoint);
   }
 
+  /// Nominatim: English details; never show raw lat/lng in the UI.
   Future<void> _reverseGeocode(LatLng point) async {
-    setState(() => _loadingAddress = true);
+    final gen = ++_geocodeGeneration;
+    setState(() {
+      _loadingAddress = true;
+      _inferredCity = null;
+    });
     try {
-      final placemarks = await placemarkFromCoordinates(
-        point.latitude,
-        point.longitude,
-      );
-      if (!mounted) return;
-      final address = placemarks.isNotEmpty
-          ? _formatPlacemark(placemarks.first)
-          : '${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}';
+      final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+        'lat': '${point.latitude}',
+        'lon': '${point.longitude}',
+        'format': 'jsonv2',
+        'addressdetails': '1',
+        'accept-language': 'en',
+      });
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'User-Agent':
+                  'SpeakDine/1.0 (Flutter app; contact via app store listing)',
+              'Accept-Language': 'en',
+            },
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (!mounted || gen != _geocodeGeneration) return;
+
+      if (res.statusCode != 200) {
+        setState(() {
+          _address =
+              'Could not resolve address. Try moving the pin or try again.';
+          _inferredCity = null;
+          _loadingAddress = false;
+        });
+        return;
+      }
+
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic>) {
+        setState(() {
+          _address = 'Address not available. Try moving the pin slightly.';
+          _inferredCity = null;
+          _loadingAddress = false;
+        });
+        return;
+      }
+
+      final addr = decoded['address'] as Map<String, dynamic>?;
+      final formatted = _formatNominatimAddress(addr);
+      final displayName = decoded['display_name'] as String?;
+      final line = (formatted != null && formatted.isNotEmpty)
+          ? formatted
+          : ((displayName != null && displayName.trim().isNotEmpty)
+              ? displayName.trim()
+              : 'Address not available. Try moving the pin slightly.');
+
+      final city = cityFromNominatimAddress(addr);
+
       setState(() {
-        _address = address;
+        _address = line;
+        _inferredCity = city;
         _loadingAddress = false;
       });
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      debugPrint('[LocationPicker] reverse geocode: $e\n$st');
+      if (!mounted || gen != _geocodeGeneration) return;
       setState(() {
         _address =
-            '${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}';
+            'Could not load address. Check your connection and try again.';
+        _inferredCity = null;
         _loadingAddress = false;
       });
     }
   }
 
-  String _formatPlacemark(Placemark p) {
-    final parts = <String>[];
-    if (p.street?.isNotEmpty ?? false) parts.add(p.street!);
-    if (p.subLocality?.isNotEmpty ?? false) parts.add(p.subLocality!);
-    if (p.locality?.isNotEmpty ?? false) parts.add(p.locality!);
-    if (p.administrativeArea?.isNotEmpty ?? false) parts.add(p.administrativeArea!);
-    if (p.country?.isNotEmpty ?? false) parts.add(p.country!);
-    return parts.join(', ');
+  /// Build a single readable line: house number, street, area, city, region, country.
+  String? _formatNominatimAddress(Map<String, dynamic>? raw) {
+    if (raw == null) return null;
+    String? g(String k) {
+      final v = raw[k];
+      if (v == null) return null;
+      final s = v.toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    final line1Parts = <String>[];
+    final hn = g('house_number');
+    final road = g('road');
+    final amenity = g('amenity');
+    if (hn != null) line1Parts.add(hn);
+    if (road != null) line1Parts.add(road);
+    if (line1Parts.isEmpty && amenity != null) line1Parts.add(amenity);
+
+    final area = g('area') ??
+        g('neighbourhood') ??
+        g('suburb') ??
+        g('quarter') ??
+        g('district');
+
+    final city = g('city') ??
+        g('town') ??
+        g('village') ??
+        g('municipality');
+
+    final state = g('state') ?? g('region');
+    final country = g('country');
+
+    final segments = <String>[];
+    if (line1Parts.isNotEmpty) {
+      segments.add(line1Parts.join(' '));
+    }
+    if (area != null) segments.add(area);
+    if (city != null) segments.add(city);
+    if (state != null && state != city) segments.add(state);
+    if (country != null) segments.add(country);
+
+    if (segments.isEmpty) return null;
+    return segments.join(', ');
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
@@ -92,7 +192,7 @@ class _LocationPickerState extends State<LocationPicker> {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (!mounted) return;
-        showAppToast(context, 'Location services are disabled. Please enable them.', isError: true);
+        showAppToast(context, 'Location services are disabled. Please enable them.');
         setState(() => _loadingMyLocation = false);
         return;
       }
@@ -112,7 +212,7 @@ class _LocationPickerState extends State<LocationPicker> {
       }
       if (permission == LocationPermission.denied) {
         if (!mounted) return;
-        showAppToast(context, 'Location permission denied.', isError: true);
+        showAppToast(context, 'Location permission denied.');
         setState(() => _loadingMyLocation = false);
         return;
       }
@@ -141,6 +241,7 @@ class _LocationPickerState extends State<LocationPicker> {
       _selectedPoint.latitude,
       _selectedPoint.longitude,
       _address,
+      _inferredCity,
     );
   }
 
@@ -151,8 +252,11 @@ class _LocationPickerState extends State<LocationPicker> {
 
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Flexible(
+        SizedBox(
+          height: 280,
+          width: double.infinity,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: FlutterMap(
@@ -166,8 +270,11 @@ class _LocationPickerState extends State<LocationPicker> {
                 ),
               ),
               children: [
+                /// Carto Light: Latin-script / English-oriented labels vs default OSM tiles.
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  urlTemplate:
+                      'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
                   userAgentPackageName: 'com.speakdine.app',
                 ),
                 MarkerLayer(
@@ -189,7 +296,16 @@ class _LocationPickerState extends State<LocationPicker> {
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
+        Text(
+          '© CARTO © OpenStreetMap contributors',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 10,
+            color: theme.colorScheme.mutedForeground,
+          ),
+        ),
+        const SizedBox(height: 8),
         if (_loadingAddress)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -215,10 +331,24 @@ class _LocationPickerState extends State<LocationPicker> {
             child: Text(
               _address,
               textAlign: TextAlign.center,
-              maxLines: 2,
+              maxLines: 4,
               overflow: TextOverflow.ellipsis,
             ).muted().small(),
           ),
+        if (_inferredCity != null &&
+            _inferredCity!.trim().isNotEmpty &&
+            !_loadingAddress) ...[
+          const SizedBox(height: 6),
+          Text(
+            'City for discovery: ${_inferredCity!.trim()}',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: primary,
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Row(
           children: [

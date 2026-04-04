@@ -7,7 +7,10 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_windows
   firebase_auth
   firebase_core
+  firebase_storage
+  flutter_tts
   geolocator_windows
+  speech_to_text_windows
   url_launcher_windows
 )
 

@@ -1,6 +1,7 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/view/home/customer_shell.dart';
 import 'package:speak_dine/view/home/restaurant_shell.dart';
 import 'package:speak_dine/view/authScreens/signup_view.dart';
@@ -72,6 +73,8 @@ class _LoginViewState extends State<LoginView> {
 
     final userDoc = await _firestore.collection('users').doc(uid).get();
     if (userDoc.exists && mounted) {
+      await cartService.restoreForCustomer(uid);
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const CustomerShell()),
