@@ -18,6 +18,10 @@ enum LoginLookupSyncResult {
 /// Doc ids: `u_{lowercaseName}` for customers, `r_{lowercaseRestaurantName}` for restaurants.
 /// Each doc is owned by one [uid]; [syncCustomerDisplayName] / [syncRestaurantName] use a
 /// transaction so two accounts cannot claim the same sign-in name.
+///
+/// [syncCustomerDisplayName] cannot read other users' [/users] docs (Firestore rules), so if
+/// [loginLookup] already maps a name to another [uid], we report [LoginLookupSyncResult.nameAlreadyClaimed]
+/// without stale-row cleanup on the client. Pruning orphaned lookup rows is a backend/admin concern.
 class LoginLookupSync {
   LoginLookupSync._();
 
@@ -100,14 +104,8 @@ class LoginLookupSync {
         if (newSnap.exists) {
           final existingUid = newSnap.data()?['uid'] as String?;
           if (existingUid != null && existingUid != uid) {
-            final profileRef =
-                firestore.collection('users').doc(existingUid);
-            final profileSnap = await txn.get(profileRef);
-            if (profileSnap.exists) {
-              conflict = true;
-              return;
-            }
-            txn.delete(newRef);
+            conflict = true;
+            return;
           }
         }
 
@@ -124,7 +122,14 @@ class LoginLookupSync {
         txn.set(newRef, {'uid': uid, 'email': e}, SetOptions(merge: true));
       });
     } catch (err, st) {
-      debugPrint('[LoginLookupSync] syncCustomerDisplayName $err\n$st');
+      if (err is FirebaseException) {
+        debugPrint(
+          '[LoginLookupSync] syncCustomerDisplayName '
+          'code=${err.code} message=${err.message}',
+        );
+      } else {
+        debugPrint('[LoginLookupSync] syncCustomerDisplayName $err\n$st');
+      }
       return LoginLookupSyncResult.failed;
     }
     if (conflict) return LoginLookupSyncResult.nameAlreadyClaimed;

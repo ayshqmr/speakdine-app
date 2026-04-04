@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:speak_dine/services/notification_service.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 /// Full-screen notifications. Realtime Firestore updates are used for
 /// [NotificationsView.restaurant] only; customer uses a static explainer (no listener).
@@ -41,9 +42,18 @@ class _NotificationsViewState extends State<NotificationsView> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: widget.restaurantRealtime
-          ? _RestaurantNotificationsBody(theme: theme)
-          : _CustomerNotificationsPlaceholder(theme: theme),
+      body: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: widget.restaurantRealtime
+                ? _RestaurantNotificationsBody(theme: theme)
+                : _CustomerNotificationsPlaceholder(theme: theme),
+          ),
+          if (!widget.restaurantRealtime)
+            const CustomerVoiceFabPositioned(hasBottomDock: false),
+        ],
+      ),
     );
   }
 }

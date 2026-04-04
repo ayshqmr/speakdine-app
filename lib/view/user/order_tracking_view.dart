@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speak_dine/view/user/review_dialog.dart';
 import 'package:speak_dine/utils/pkr_format.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 const _trackingStages = [
   _TrackingStage(
@@ -71,149 +72,165 @@ class OrderTrackingView extends StatelessWidget {
       child: Container(
         color: theme.colorScheme.background,
         child: SafeArea(
-          child: Column(
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                child: Row(
-                  children: [
-                    GhostButton(
-                      density: ButtonDensity.icon,
-                      onPressed: () => Navigator.pop(context),
-                      child: Icon(RadixIcons.arrowLeft,
-                          size: 20, color: theme.colorScheme.primary),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Order Tracking').h4().semiBold(),
-                          Text(restaurantName).muted().small(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: StreamBuilder<DocumentSnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(user?.uid)
-                      .collection('orders')
-                      .doc(orderId)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return Center(
-                        child: CircularProgressIndicator(
-                          color: theme.colorScheme.primary,
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                    child: Row(
+                      children: [
+                        GhostButton(
+                          density: ButtonDensity.icon,
+                          onPressed: () => Navigator.pop(context),
+                          child: Icon(RadixIcons.arrowLeft,
+                              size: 20, color: theme.colorScheme.primary),
                         ),
-                      );
-                    }
-                    if (!snapshot.hasData || !snapshot.data!.exists) {
-                      return const Center(
-                        child: Text('Order not found'),
-                      );
-                    }
-
-                    final order = snapshot.data!.data() as Map<String, dynamic>;
-                    final status = order['status'] as String? ?? 'pending';
-                    final estimatedMinutes = order['estimatedMinutes'] as int?;
-                    final acceptedAt = order['acceptedAt'] as Timestamp?;
-                    final isDelivered = status == 'delivered';
-                    final reviewed = order['reviewed'] == true;
-                    final currentStageIndex = _statusIndex(status);
-
-                    return SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Column(
-                        children: [
-                          if (estimatedMinutes != null && acceptedAt != null && !isDelivered) ...[
-                            _EtaCountdownCard(
-                              estimatedMinutes: estimatedMinutes,
-                              acceptedAt: acceptedAt,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Order Tracking').h4().semiBold(),
+                              Text(restaurantName).muted().small(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: StreamBuilder<DocumentSnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user?.uid)
+                          .collection('orders')
+                          .doc(orderId)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return Center(
+                            child: CircularProgressIndicator(
+                              color: theme.colorScheme.primary,
                             ),
-                            const SizedBox(height: 24),
-                          ],
-                          if (isDelivered) ...[
-                            _buildDeliveredCard(theme),
-                            const SizedBox(height: 24),
-                          ],
-                          _buildTrackingStepper(theme, currentStageIndex, isDelivered),
-                          if (isDelivered && !reviewed) ...[
-                            const SizedBox(height: 32),
-                            SizedBox(
-                              width: double.infinity,
-                              child: PrimaryButton(
-                                onPressed: () {
-                                  showReviewDialog(
-                                    context,
-                                    restaurantId: order['restaurantId'] ?? '',
-                                    restaurantName: restaurantName,
-                                    orderId: orderId,
-                                    customerId: user?.uid ?? '',
-                                    customerName: order['customerName'] ?? 'Customer',
-                                  );
-                                },
-                                child: const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(RadixIcons.star, size: 16),
-                                    SizedBox(width: 8),
-                                    Text('Rate Your Experience'),
-                                  ],
+                          );
+                        }
+                        if (!snapshot.hasData || !snapshot.data!.exists) {
+                          return const Center(
+                            child: Text('Order not found'),
+                          );
+                        }
+
+                        final order =
+                            snapshot.data!.data() as Map<String, dynamic>;
+                        final status = order['status'] as String? ?? 'pending';
+                        final estimatedMinutes =
+                            order['estimatedMinutes'] as int?;
+                        final acceptedAt =
+                            order['acceptedAt'] as Timestamp?;
+                        final isDelivered = status == 'delivered';
+                        final reviewed = order['reviewed'] == true;
+                        final currentStageIndex = _statusIndex(status);
+
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Column(
+                            children: [
+                              if (estimatedMinutes != null &&
+                                  acceptedAt != null &&
+                                  !isDelivered) ...[
+                                _EtaCountdownCard(
+                                  estimatedMinutes: estimatedMinutes,
+                                  acceptedAt: acceptedAt,
                                 ),
-                              ),
-                            ),
-                          ],
-                          if (isDelivered && reviewed) ...[
-                            const SizedBox(height: 32),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 14, horizontal: 16),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary
-                                    .withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: theme.colorScheme.primary
-                                      .withValues(alpha: 0.22),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    RadixIcons.checkCircled,
-                                    size: 18,
-                                    color: theme.colorScheme.primary,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    'Reviewed',
-                                    style: TextStyle(
-                                      color: theme.colorScheme.primary,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 15,
+                                const SizedBox(height: 24),
+                              ],
+                              if (isDelivered) ...[
+                                _buildDeliveredCard(theme),
+                                const SizedBox(height: 24),
+                              ],
+                              _buildTrackingStepper(
+                                  theme, currentStageIndex, isDelivered),
+                              if (isDelivered && !reviewed) ...[
+                                const SizedBox(height: 32),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: PrimaryButton(
+                                    onPressed: () {
+                                      showReviewDialog(
+                                        context,
+                                        restaurantId:
+                                            order['restaurantId'] ?? '',
+                                        restaurantName: restaurantName,
+                                        orderId: orderId,
+                                        customerId: user?.uid ?? '',
+                                        customerName:
+                                            order['customerName'] ?? 'Customer',
+                                      );
+                                    },
+                                    child: const Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(RadixIcons.star, size: 16),
+                                        SizedBox(width: 8),
+                                        Text('Rate Your Experience'),
+                                      ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 24),
-                          _buildOrderDetails(theme, order),
-                          const SizedBox(height: 32),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                                ),
+                              ],
+                              if (isDelivered && reviewed) ...[
+                                const SizedBox(height: 32),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 14, horizontal: 16),
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.primary
+                                        .withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: theme.colorScheme.primary
+                                          .withValues(alpha: 0.22),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        RadixIcons.checkCircled,
+                                        size: 18,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text(
+                                        'Reviewed',
+                                        style: TextStyle(
+                                          color: theme.colorScheme.primary,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 24),
+                              _buildOrderDetails(theme, order),
+                              const SizedBox(height: 32),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
+              const CustomerVoiceFabPositioned(hasBottomDock: false),
             ],
           ),
         ),

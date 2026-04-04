@@ -50,6 +50,7 @@ dependencies:
   intl: ^0.20.2
 
   url_launcher: ^6.2.5
+  shared_preferences: ^2.5.3
 
   # Maps & Location
   flutter_map: ^7.0.2

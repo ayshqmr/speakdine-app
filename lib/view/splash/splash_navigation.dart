@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
+import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/view/authScreens/login_view.dart';
 import 'package:speak_dine/view/home/customer_shell.dart';
 import 'package:speak_dine/view/home/restaurant_shell.dart';
@@ -37,6 +38,8 @@ Future<void> _routeByRole(BuildContext context, String uid) async {
 
   final userDoc = await firestore.collection('users').doc(uid).get();
   if (userDoc.exists && context.mounted) {
+    await cartService.restoreForCustomer(uid);
+    if (!context.mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute<void>(builder: (_) => const CustomerShell()),

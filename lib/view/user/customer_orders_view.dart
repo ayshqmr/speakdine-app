@@ -6,8 +6,15 @@ import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/view/user/order_tracking_view.dart';
 import 'package:speak_dine/view/user/review_dialog.dart';
 import 'package:speak_dine/utils/pkr_format.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
 
-const _activeStatuses = {'pending', 'accepted', 'in_kitchen', 'handed_to_rider', 'on_the_way'};
+const _activeStatuses = {
+  'pending',
+  'accepted',
+  'in_kitchen',
+  'handed_to_rider',
+  'on_the_way',
+};
 
 const _statusDisplayLabels = {
   'pending': 'Pending',
@@ -19,7 +26,11 @@ const _statusDisplayLabels = {
 };
 
 class CustomerOrdersView extends StatelessWidget {
-  const CustomerOrdersView({super.key});
+  /// When opened from Profile (pushed route), show a back control. The Orders tab
+  /// uses [showBackButton] false — same widget, embedded in [CustomerShell].
+  const CustomerOrdersView({super.key, this.showBackButton = false});
+
+  final bool showBackButton;
 
   @override
   Widget build(BuildContext context) {
@@ -30,14 +41,27 @@ class CustomerOrdersView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          child: Column(
+          padding: EdgeInsets.fromLTRB(showBackButton ? 4 : 20, 16, 20, 0),
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('My Orders').h4().semiBold(),
-              const Text('Track and review your past orders')
-                  .muted()
-                  .small(),
+              if (showBackButton) ...[
+                GhostButton(
+                  density: ButtonDensity.compact,
+                  onPressed: () => Navigator.pop(context),
+                  child: const Icon(RadixIcons.arrowLeft, size: 16),
+                ),
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('My Orders').h4().semiBold(),
+                    const Text('Track and review your past orders').muted().small(),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -55,19 +79,26 @@ class CustomerOrdersView extends StatelessWidget {
                 return _buildSkeleton();
               }
               if (snapshot.hasError) {
-                debugPrint('[CustomerOrders] Orders stream error: ${snapshot.error}');
+                debugPrint(
+                  '[CustomerOrders] Orders stream error: ${snapshot.error}',
+                );
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (context.mounted) {
-                    showAppToast(context, 'Unable to load orders. Please try again.');
+                    showAppToast(
+                      context,
+                      'Unable to load orders. Please try again.',
+                    );
                   }
                 });
                 return Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(RadixIcons.crossCircled,
-                          size: 48,
-                          color: theme.colorScheme.destructive),
+                      Icon(
+                        RadixIcons.crossCircled,
+                        size: 48,
+                        color: theme.colorScheme.destructive,
+                      ),
                       const SizedBox(height: 16),
                       const Text('Unable to load orders').semiBold(),
                     ],
@@ -75,24 +106,59 @@ class CustomerOrdersView extends StatelessWidget {
                 );
               }
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                CustomerVoiceBridge.instance.openPendingReviewDialog = null;
                 return Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(RadixIcons.archive,
-                          size: 48,
-                          color: theme.colorScheme.mutedForeground),
+                      Icon(
+                        RadixIcons.archive,
+                        size: 48,
+                        color: theme.colorScheme.mutedForeground,
+                      ),
                       const SizedBox(height: 16),
                       const Text('No orders yet').semiBold(),
                       const SizedBox(height: 8),
-                      const Text('Your order history will appear here')
-                          .muted()
-                          .small(),
+                      const Text(
+                        'Your order history will appear here',
+                      ).muted().small(),
                     ],
                   ),
                 );
               }
               final orders = snapshot.data!.docs;
+              final pendingReviewDoc = orders
+                  .cast<QueryDocumentSnapshot>()
+                  .firstWhere((doc) {
+                    final order = doc.data() as Map<String, dynamic>;
+                    final isDelivered =
+                        (order['status'] as String? ?? '') == 'delivered';
+                    final reviewed = order['reviewed'] == true;
+                    return isDelivered && !reviewed;
+                  }, orElse: () => orders.first);
+              final pendingData =
+                  pendingReviewDoc.data() as Map<String, dynamic>;
+              final hasPendingReview =
+                  (pendingData['status'] as String? ?? '') == 'delivered' &&
+                  pendingData['reviewed'] != true;
+
+              CustomerVoiceBridge.instance.openPendingReviewDialog =
+                  hasPendingReview
+                  ? () async {
+                      showReviewDialog(
+                        context,
+                        restaurantId: pendingData['restaurantId'] ?? '',
+                        restaurantName:
+                            pendingData['restaurantName'] ?? 'Restaurant',
+                        orderId: pendingReviewDoc.id,
+                        customerId: user?.uid ?? '',
+                        customerName: pendingData['customerName'] ?? 'Customer',
+                      );
+                      return null;
+                    }
+                  : () async =>
+                        'You do not have any delivered order pending review.';
+
               return ListView.separated(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 itemCount: orders.length,
@@ -138,8 +204,13 @@ class CustomerOrdersView extends StatelessWidget {
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, ThemeData theme,
-      Map<String, dynamic> order, String orderId, User? user) {
+  Widget _buildOrderCard(
+    BuildContext context,
+    ThemeData theme,
+    Map<String, dynamic> order,
+    String orderId,
+    User? user,
+  ) {
     final status = order['status'] as String? ?? 'pending';
     final restaurantName = order['restaurantName'] ?? 'Restaurant';
     final itemCount = order['itemCount'] ?? 0;
@@ -185,8 +256,11 @@ class CustomerOrdersView extends StatelessWidget {
             const SizedBox(height: 10),
             Row(
               children: [
-                Icon(RadixIcons.archive,
-                    size: 14, color: theme.colorScheme.mutedForeground),
+                Icon(
+                  RadixIcons.archive,
+                  size: 14,
+                  color: theme.colorScheme.mutedForeground,
+                ),
                 const SizedBox(width: 6),
                 Text('$itemCount items').muted().small(),
                 const Spacer(),
@@ -203,8 +277,11 @@ class CustomerOrdersView extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Icon(RadixIcons.arrowRight,
-                      size: 12, color: theme.colorScheme.primary),
+                  Icon(
+                    RadixIcons.arrowRight,
+                    size: 12,
+                    color: theme.colorScheme.primary,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'Tap to track',
@@ -236,7 +313,11 @@ class CustomerOrdersView extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(RadixIcons.star, size: 14, color: theme.colorScheme.primary),
+                      Icon(
+                        RadixIcons.star,
+                        size: 14,
+                        color: theme.colorScheme.primary,
+                      ),
                       const SizedBox(width: 6),
                       const Text('Rate & Review'),
                     ],
@@ -248,7 +329,10 @@ class CustomerOrdersView extends StatelessWidget {
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 10,
+                  horizontal: 12,
+                ),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),

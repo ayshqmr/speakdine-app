@@ -1,5 +1,4 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
-import 'package:flutter/material.dart' show Icons;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,6 +6,8 @@ import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/services/payment_service.dart';
 import 'package:speak_dine/utils/pkr_format.dart';
 import 'package:speak_dine/services/notification_service.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 class CartView extends StatefulWidget {
   final bool embedded;
@@ -31,14 +32,93 @@ class _CartViewState extends State<CartView> {
 
   static const _stripeMinimumPkr = 150.0;
 
+  @override
+  void initState() {
+    super.initState();
+    final bridge = CustomerVoiceBridge.instance;
+    bridge.voiceFullCartSummary = _voiceFullCartSummary;
+    bridge.placeVoiceOrderWithPayment = _placeOrderFromVoice;
+    bridge.showCartPaymentMethodDialog = _showPaymentMethodDialog;
+  }
+
+  @override
+  void dispose() {
+    final bridge = CustomerVoiceBridge.instance;
+    if (bridge.voiceFullCartSummary == _voiceFullCartSummary) {
+      bridge.voiceFullCartSummary = null;
+    }
+    if (bridge.placeVoiceOrderWithPayment == _placeOrderFromVoice) {
+      bridge.placeVoiceOrderWithPayment = null;
+    }
+    if (bridge.showCartPaymentMethodDialog == _showPaymentMethodDialog) {
+      bridge.showCartPaymentMethodDialog = null;
+    }
+    super.dispose();
+  }
+
+  String _voiceFullCartSummary() {
+    if (cartService.isEmpty) {
+      return 'Your cart is empty.';
+    }
+    final parts = <String>[];
+    for (final entry in cartService.cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+        final q = item['quantity'];
+        var qty = 1;
+        if (q is num) {
+          qty = q.toInt().clamp(1, 999);
+        }
+        parts.add('$qty ${qty == 1 ? name : '${name}s'}');
+      }
+    }
+    final total = formatPkr(cartService.totalAmount);
+    return 'Your cart has: ${parts.join(', ')}. Total is $total.';
+  }
+
+  Future<String?> _placeOrderFromVoice(String method) async {
+    final bridge = CustomerVoiceBridge.instance;
+    final normalized = method.toLowerCase().trim();
+    if (normalized != 'cod' && normalized != 'online') {
+      return 'Please choose cash on delivery or online payment.';
+    }
+    if (_placingOrder) {
+      return 'Your order is already being placed.';
+    }
+    if (cartService.isEmpty) {
+      return 'Your cart is empty.';
+    }
+    if (normalized == 'online' && cartService.totalAmount < _stripeMinimumPkr) {
+      return 'Online payment needs at least ${formatPkr(_stripeMinimumPkr)}. Please choose cash on delivery.';
+    }
+    if (mounted &&
+        bridge.paymentMethodDialogVisible &&
+        Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    bridge.voiceExpectingCheckoutPayment = false;
+    final ok = await _placeOrder(paymentMethod: normalized, silentToast: true);
+    if (!ok) {
+      return 'Could not place your order right now. Please try again.';
+    }
+    if (normalized == 'online') {
+      return 'Online payment selected. I opened checkout and moved you to your orders.';
+    }
+    return 'Order placed with cash on delivery. I moved you to your orders.';
+  }
+
   void _showPaymentMethodDialog() {
-    showDialog(
+    final bridge = CustomerVoiceBridge.instance;
+    bridge.paymentMethodDialogVisible = true;
+    showDialog<void>(
       context: context,
       builder: (ctx) => _PaymentMethodDialog(
         totalAmount: cartService.totalAmount,
         firestore: _firestore,
         onSelect: (method, {String? stripeCustomerId, String? savedCardId}) {
           Navigator.pop(ctx);
+          bridge.voiceExpectingCheckoutPayment = false;
           _placeOrder(
             paymentMethod: method,
             stripeCustomerId: stripeCustomerId,
@@ -46,15 +126,19 @@ class _CartViewState extends State<CartView> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      bridge.paymentMethodDialogVisible = false;
+      bridge.voiceExpectingCheckoutPayment = false;
+    });
   }
 
-  Future<void> _placeOrder({
+  Future<bool> _placeOrder({
     required String paymentMethod,
     String? stripeCustomerId,
     String? savedCardId,
+    bool silentToast = false,
   }) async {
-    if (cartService.isEmpty) return;
+    if (cartService.isEmpty) return false;
 
     setState(() => _placingOrder = true);
 
@@ -62,8 +146,7 @@ class _CartViewState extends State<CartView> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('User not logged in');
 
-      final userDoc =
-          await _firestore.collection('users').doc(user.uid).get();
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
       final userData = userDoc.data() ?? {};
       final customerName = userData['name'] ?? 'Customer';
       final customerPhone = userData['phone'] ?? '';
@@ -73,13 +156,20 @@ class _CartViewState extends State<CartView> {
       final customerAddress = userData['address'] as String? ?? '';
 
       if (customerLat == null || customerLng == null) {
-        if (!mounted) return;
+        if (!mounted) return false;
         setState(() => _placingOrder = false);
-        showAppToast(context, 'Please set your delivery location in your profile first.');
-        return;
+        if (!silentToast) {
+          showAppToast(
+            context,
+            'Please set your delivery location in your profile first.',
+          );
+        }
+        return false;
       }
 
-      final initialStatus = paymentMethod == 'online' ? 'awaiting_payment' : 'pending';
+      final initialStatus = paymentMethod == 'online'
+          ? 'awaiting_payment'
+          : 'pending';
       final paymentStatus = paymentMethod == 'cod' ? 'pending' : 'pending';
 
       for (var entry in cartService.cart.entries) {
@@ -117,30 +207,31 @@ class _CartViewState extends State<CartView> {
             .collection('orders')
             .doc();
 
-        final effectivePaymentMethod =
-            paymentMethod == 'saved_card' ? 'online' : paymentMethod;
+        final effectivePaymentMethod = paymentMethod == 'saved_card'
+            ? 'online'
+            : paymentMethod;
 
         final restaurantOrderRef = await _firestore
             .collection('restaurants')
             .doc(restaurantId)
             .collection('orders')
             .add({
-          'customerId': user.uid,
-          'customerOrderId': customerOrderRef.id,
-          'customerName': customerName,
-          'customerPhone': customerPhone,
-          'customerEmail': customerEmail,
-          'customerLat': customerLat,
-          'customerLng': customerLng,
-          'customerAddress': customerAddress,
-          'items': orderItems,
-          'itemCount': totalQuantity,
-          'total': restaurantTotal,
-          'status': initialStatus,
-          'paymentMethod': effectivePaymentMethod,
-          'paymentStatus': paymentStatus,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+              'customerId': user.uid,
+              'customerOrderId': customerOrderRef.id,
+              'customerName': customerName,
+              'customerPhone': customerPhone,
+              'customerEmail': customerEmail,
+              'customerLat': customerLat,
+              'customerLng': customerLng,
+              'customerAddress': customerAddress,
+              'items': orderItems,
+              'itemCount': totalQuantity,
+              'total': restaurantTotal,
+              'status': initialStatus,
+              'paymentMethod': effectivePaymentMethod,
+              'paymentStatus': paymentStatus,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
 
         await customerOrderRef.set({
           'restaurantId': restaurantId,
@@ -155,23 +246,24 @@ class _CartViewState extends State<CartView> {
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-          final debtDoc = await _firestore
+        final debtDoc = await _firestore
             .collection('platformDebts')
             .doc(restaurantId)
             .get();
-        final currentDebtPkr = (debtDoc.data()?['amount'] as num?)?.toDouble() ?? 0.0;
+        final currentDebtPkr =
+            (debtDoc.data()?['amount'] as num?)?.toDouble() ?? 0.0;
         final currentDebtPaisa = (currentDebtPkr * 100).round();
 
         if (paymentMethod == 'cod') {
           final codFee = restaurantTotal * 0.05;
-          await _firestore
-              .collection('platformDebts')
-              .doc(restaurantId)
-              .set({'amount': FieldValue.increment(codFee)}, SetOptions(merge: true));
+          await _firestore.collection('platformDebts').doc(restaurantId).set({
+            'amount': FieldValue.increment(codFee),
+          }, SetOptions(merge: true));
         }
 
         if (paymentMethod == 'online') {
-          final customerId = stripeCustomerId ??
+          final customerId =
+              stripeCustomerId ??
               await PaymentService.ensureStripeCustomer(
                 userId: user.uid,
                 email: customerEmail,
@@ -191,17 +283,24 @@ class _CartViewState extends State<CartView> {
               await restaurantOrderRef.delete();
               await customerOrderRef.delete();
               if (mounted) {
-                showAppToast(context, 'Payment setup failed. Total may be too low for online payment. Try Cash on Delivery.');
+                if (!silentToast) {
+                  showAppToast(
+                    context,
+                    'Payment setup failed. Total may be too low for online payment. Try Cash on Delivery.',
+                  );
+                }
               }
               setState(() => _placingOrder = false);
-              return;
+              return false;
             }
 
             if (payResult.debtRecoveredPaisa > 0) {
               await _firestore
                   .collection('platformDebts')
                   .doc(restaurantId)
-                  .set({'amount': FieldValue.increment(-payResult.debtRecoveredPkr)}, SetOptions(merge: true));
+                  .set({
+                    'amount': FieldValue.increment(-payResult.debtRecoveredPkr),
+                  }, SetOptions(merge: true));
             }
 
             await _saveTransaction(
@@ -228,10 +327,15 @@ class _CartViewState extends State<CartView> {
               await restaurantOrderRef.delete();
               await customerOrderRef.delete();
               if (mounted) {
-                showAppToast(context, 'Payment setup failed. Total may be too low for online payment. Try Cash on Delivery.');
+                if (!silentToast) {
+                  showAppToast(
+                    context,
+                    'Payment setup failed. Total may be too low for online payment. Try Cash on Delivery.',
+                  );
+                }
               }
               setState(() => _placingOrder = false);
-              return;
+              return false;
             }
 
             final platformFee = restaurantTotal * 0.05;
@@ -274,7 +378,11 @@ class _CartViewState extends State<CartView> {
                 await _firestore
                     .collection('platformDebts')
                     .doc(restaurantId)
-                    .set({'amount': FieldValue.increment(-payResult.debtRecoveredPkr)}, SetOptions(merge: true));
+                    .set({
+                      'amount': FieldValue.increment(
+                        -payResult.debtRecoveredPkr,
+                      ),
+                    }, SetOptions(merge: true));
               }
 
               await _saveTransaction(
@@ -292,10 +400,15 @@ class _CartViewState extends State<CartView> {
               );
             } else {
               if (mounted) {
-                showAppToast(context, 'Card payment failed. Please try another method.');
+                if (!silentToast) {
+                  showAppToast(
+                    context,
+                    'Card payment failed. Please try another method.',
+                  );
+                }
               }
               setState(() => _placingOrder = false);
-              return;
+              return false;
             }
           } else {
             final charged = await PaymentService.chargeWithSavedCard(
@@ -329,10 +442,15 @@ class _CartViewState extends State<CartView> {
               );
             } else {
               if (mounted) {
-                showAppToast(context, 'Card payment failed. Please try another method.');
+                if (!silentToast) {
+                  showAppToast(
+                    context,
+                    'Card payment failed. Please try another method.',
+                  );
+                }
               }
               setState(() => _placingOrder = false);
-              return;
+              return false;
             }
           }
         }
@@ -352,23 +470,30 @@ class _CartViewState extends State<CartView> {
 
       setState(() => cartService.clearCart());
 
-      if (!mounted) return;
+      if (!mounted) return false;
 
       if (paymentMethod == 'online') {
-        showAppToast(context, 'Complete payment in the opened page');
+        if (!silentToast) {
+          showAppToast(context, 'Complete payment in the opened page');
+        }
       } else if (paymentMethod == 'saved_card') {
-        showAppToast(context, 'Payment successful! Order placed.');
+        if (!silentToast) {
+          showAppToast(context, 'Payment successful! Order placed.');
+        }
       } else {
-        showAppToast(context, 'Order placed successfully!');
+        if (!silentToast) {
+          showAppToast(context, 'Order placed successfully!');
+        }
       }
       if (!widget.embedded) Navigator.pop(context);
+      return true;
     } catch (_) {
-      if (!mounted) return;
-      showAppToast(
-          context, 'Something went wrong. Please try again later.');
+      if (!mounted) return false;
+      if (!silentToast) {
+        showAppToast(context, 'Something went wrong. Please try again later.');
+      }
+      return false;
     }
-
-    if (mounted) setState(() => _placingOrder = false);
   }
 
   void _clearCart() {
@@ -451,9 +576,9 @@ class _CartViewState extends State<CartView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text('Cart').h4().semiBold(),
-                    const Text('Review your items before ordering')
-                        .muted()
-                        .small(),
+                    const Text(
+                      'Review your items before ordering',
+                    ).muted().small(),
                   ],
                 ),
               ),
@@ -463,9 +588,7 @@ class _CartViewState extends State<CartView> {
                   onPressed: _clearCart,
                   child: Text(
                     'Clear',
-                    style: TextStyle(
-                      color: theme.colorScheme.destructive,
-                    ),
+                    style: TextStyle(color: theme.colorScheme.destructive),
                   ).small(),
                 ),
             ],
@@ -484,7 +607,11 @@ class _CartViewState extends State<CartView> {
                         ? items.first['restaurantName'] ?? 'Restaurant'
                         : 'Restaurant';
                     return _buildRestaurantSection(
-                        theme, restaurantId, restaurantName, items);
+                      theme,
+                      restaurantId,
+                      restaurantName,
+                      items,
+                    );
                   }).toList(),
                 ),
         ),
@@ -507,8 +634,11 @@ class _CartViewState extends State<CartView> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.shopping_bag_outlined,
-              size: 64, color: theme.colorScheme.mutedForeground),
+          Icon(
+            Icons.shopping_bag_outlined,
+            size: 64,
+            color: theme.colorScheme.mutedForeground,
+          ),
           const SizedBox(height: 16),
           const Text('Your cart is empty').semiBold(),
           const SizedBox(height: 8),
@@ -541,8 +671,11 @@ class _CartViewState extends State<CartView> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Icon(RadixIcons.home,
-                      size: 16, color: theme.colorScheme.primary),
+                  Icon(
+                    RadixIcons.home,
+                    size: 16,
+                    color: theme.colorScheme.primary,
+                  ),
                   const SizedBox(width: 8),
                   Text(restaurantName).semiBold(),
                 ],
@@ -577,9 +710,7 @@ class _CartViewState extends State<CartView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(item['name'] ?? 'Item').semiBold().small(),
-                Text('${formatPkr(item['price'])} each')
-                    .muted()
-                    .small(),
+                Text('${formatPkr(item['price'])} each').muted().small(),
               ],
             ),
           ),
@@ -590,9 +721,7 @@ class _CartViewState extends State<CartView> {
                 density: ButtonDensity.icon,
                 onPressed: () => _decreaseQuantity(restaurantId, index),
                 child: Icon(
-                  item['quantity'] > 1
-                      ? RadixIcons.minus
-                      : RadixIcons.trash,
+                  item['quantity'] > 1 ? RadixIcons.minus : RadixIcons.trash,
                   size: 14,
                   color: item['quantity'] > 1
                       ? theme.colorScheme.foreground
@@ -634,9 +763,7 @@ class _CartViewState extends State<CartView> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: theme.colorScheme.card,
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.border),
-        ),
+        border: Border(top: BorderSide(color: theme.colorScheme.border)),
       ),
       child: Column(
         children: [
@@ -719,7 +846,12 @@ class _CartViewState extends State<CartView> {
 class _PaymentMethodDialog extends StatefulWidget {
   final double totalAmount;
   final FirebaseFirestore firestore;
-  final void Function(String method, {String? stripeCustomerId, String? savedCardId}) onSelect;
+  final void Function(
+    String method, {
+    String? stripeCustomerId,
+    String? savedCardId,
+  })
+  onSelect;
 
   const _PaymentMethodDialog({
     required this.totalAmount,
@@ -735,6 +867,25 @@ class _PaymentMethodDialogState extends State<_PaymentMethodDialog> {
   bool _loading = true;
   _SavedCardOption? _savedCard;
 
+  /// Same controls as [CustomerShell] (shared [CustomerVoiceMicRow]).
+  Widget _voiceMicRow(ThemeData theme, BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        const Text(
+          'Or hold the microphone and say cash on delivery or online payment.',
+        ).muted().small(),
+        const SizedBox(height: 10),
+        const Align(
+          alignment: Alignment.centerRight,
+          child: CustomerVoiceMicRow(),
+        ),
+      ],
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -744,12 +895,20 @@ class _PaymentMethodDialogState extends State<_PaymentMethodDialog> {
   Future<void> _loadData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final doc = await widget.firestore.collection('users').doc(user.uid).get();
+      final doc = await widget.firestore
+          .collection('users')
+          .doc(user.uid)
+          .get();
       final customerId = doc.data()?['stripeCustomerId'] as String?;
       if (customerId != null && customerId.isNotEmpty) {
-        final cards = await PaymentService.getSavedCards(stripeCustomerId: customerId);
+        final cards = await PaymentService.getSavedCards(
+          stripeCustomerId: customerId,
+        );
         if (cards.isNotEmpty) {
-          _savedCard = _SavedCardOption(stripeCustomerId: customerId, card: cards.first);
+          _savedCard = _SavedCardOption(
+            stripeCustomerId: customerId,
+            card: cards.first,
+          );
         }
       }
     }
@@ -779,7 +938,7 @@ class _PaymentMethodDialogState extends State<_PaymentMethodDialog> {
                   ),
                   const SizedBox(height: 12),
                   const Text('Loading payment options...').muted().small(),
-                  const SizedBox(height: 16),
+                  _voiceMicRow(theme, context),
                 ],
               )
             : Column(
@@ -821,8 +980,11 @@ class _PaymentMethodDialogState extends State<_PaymentMethodDialog> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(RadixIcons.archive, size: 16,
-                              color: theme.colorScheme.foreground),
+                          Icon(
+                            RadixIcons.archive,
+                            size: 16,
+                            color: theme.colorScheme.foreground,
+                          ),
                           const SizedBox(width: 8),
                           const Text('Cash on Delivery'),
                         ],
@@ -837,22 +999,28 @@ class _PaymentMethodDialogState extends State<_PaymentMethodDialog> {
                         onPressed: belowMinimum
                             ? null
                             : () => widget.onSelect(
-                                  'saved_card',
-                                  stripeCustomerId: _savedCard!.stripeCustomerId,
-                                  savedCardId: _savedCard!.card.id,
-                                ),
+                                'saved_card',
+                                stripeCustomerId: _savedCard!.stripeCustomerId,
+                                savedCardId: _savedCard!.card.id,
+                              ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(RadixIcons.cardStack, size: 16,
-                                color: theme.colorScheme.foreground),
+                            Icon(
+                              RadixIcons.cardStack,
+                              size: 16,
+                              color: theme.colorScheme.foreground,
+                            ),
                             const SizedBox(width: 8),
-                            Text('${_savedCard!.card.brand.toUpperCase()} ···· ${_savedCard!.card.last4}'),
+                            Text(
+                              '${_savedCard!.card.brand.toUpperCase()} ···· ${_savedCard!.card.last4}',
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ],
+                  _voiceMicRow(theme, context),
                 ],
               ),
       ),

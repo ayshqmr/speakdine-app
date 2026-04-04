@@ -5,26 +5,28 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import 'package:speak_dine/config/api_keys.dart';
 import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
+import 'package:speak_dine/voice/speaktime_assistant_system_prompt.dart';
 import 'package:speak_dine/voice/voice_intent_models.dart';
 
-/// Cloud LLM intent parser (Gemini) with strict JSON output.
-class GeminiIntentService {
-  const GeminiIntentService();
+/// Gemini turn: spoken script for TTS + optional structured intent for the app.
+class ConversationalAssistantTurn {
+  const ConversationalAssistantTurn({required this.speech, this.intent});
 
-  static const Duration _timeout = Duration(seconds: 12);
+  final String speech;
+  final VoiceIntentResult? intent;
+}
 
-  static const String _allowedKinds = '''
-nonFood, unknown, cancelAction,
-addToCartRequest, selectMenuItem, confirmAddToCart,
-openCartIntent, cartNaturalLanguageEdit,
-initiateCheckout, confirmOrderUIOnly, cancelCheckout,
-openSettings, toggleSetting, updateSettingValue,
-addToCartIntent, ambiguousOrderIntent,
-goHome, goBack, whereAmI, trackOrderIntent,
-suggestNextAction, clarifyUserIntent, cancelCurrentFlow''';
+/// Full SpeakTime system prompt + situational context → JSON { speech, intent }.
+class ConversationalAssistantService {
+  const ConversationalAssistantService();
 
-  Future<VoiceIntentResult?> classify(String utterance) async {
-    final text = utterance.trim();
+  static const Duration _timeout = Duration(seconds: 18);
+
+  Future<ConversationalAssistantTurn?> process({
+    required String userUtterance,
+    required String situationalContext,
+  }) async {
+    final text = userUtterance.trim();
     if (text.isEmpty || geminiApiKey.trim().isEmpty) {
       return null;
     }
@@ -34,41 +36,13 @@ suggestNextAction, clarifyUserIntent, cancelCurrentFlow''';
       '$geminiModel:generateContent',
     );
 
-    final categoryIds = kSdLibRestaurantCategories.map((e) => e.id).join(', ');
-    final prompt =
+    final userBlock =
         '''
-Classify this SpeakDine CUSTOMER voice command into exactly ONE intent.
+CONTEXT (facts for this turn; do not read labels like "CONTEXT" aloud):
+$situationalContext
 
-Allowed kind values (exact spelling):
-$_allowedKinds
-
-Optional categoryId only for selectMenuItem when user names a cuisine category: [$categoryIds]
-
-Return STRICT JSON only:
-{
-  "kind": "<one allowed kind>",
-  "isFoodOrOrderingRelated": true_or_false,
-  "confidence": 0_to_1,
-  "extractedQuery": "",
-  "restaurantName": "",
-  "itemName": "",
-  "categoryId": "",
-  "settingKey": "",
-  "settingValue": ""
-}
-
-Rules:
-- addToCartRequest: user wants to add food; put dish in itemName or extractedQuery.
-- confirmAddToCart: yes / add it / confirm / put in cart while meaning confirm.
-- initiateCheckout: user wants to place order; app opens cart payment options (COD vs online). confirmOrderUIOnly: only remind to confirm on screen.
-- ambiguousOrderIntent: could mean order food vs place order vs cart.
-- updateSettingValue: use settingKey username + settingValue for name changes.
-- cancelAction / cancelCurrentFlow: stop or never mind.
-- trackOrderIntent: user wants to track an active order, see delivery status, or where the order is.
-- cartNaturalLanguageEdit: change cart by voice in one sentence (remove, add one more, etc.); put full utterance in extractedQuery.
-
-Utterance:
-"$text"
+USER SAID:
+$text
 ''';
 
     try {
@@ -80,15 +54,21 @@ Utterance:
               'x-goog-api-key': geminiApiKey,
             },
             body: jsonEncode({
+              'systemInstruction': {
+                'parts': [
+                  {'text': kSpeaktimeAssistantSystemPrompt},
+                ],
+              },
               'contents': [
                 {
+                  'role': 'user',
                   'parts': [
-                    {'text': prompt},
+                    {'text': userBlock},
                   ],
                 },
               ],
               'generationConfig': {
-                'temperature': 0.1,
+                'temperature': 0.35,
                 'responseMimeType': 'application/json',
               },
             }),
@@ -97,7 +77,7 @@ Utterance:
 
       if (response.statusCode != 200) {
         debugPrint(
-          '[GeminiIntent] HTTP ${response.statusCode}: ${response.body}',
+          '[SpeakTimeAssistant] HTTP ${response.statusCode}: ${response.body}',
         );
         return null;
       }
@@ -129,21 +109,36 @@ Utterance:
       }
 
       final parsed = jsonDecode(rawJson) as Map<String, dynamic>;
-      return _toIntent(parsed);
+      final speech = (parsed['speech'] ?? '').toString().trim();
+      if (speech.isEmpty) {
+        return null;
+      }
+
+      final intentMap = parsed['intent'];
+      VoiceIntentResult? intent;
+      if (intentMap is Map<String, dynamic>) {
+        intent = _intentFromAssistantJson(intentMap);
+      }
+
+      return ConversationalAssistantTurn(speech: speech, intent: intent);
     } on TimeoutException {
-      debugPrint('[GeminiIntent] Timed out after ${_timeout.inSeconds}s');
+      debugPrint('[SpeakTimeAssistant] Timed out after ${_timeout.inSeconds}s');
       return null;
     } catch (e) {
-      debugPrint('[GeminiIntent] parse/request failed: $e');
+      debugPrint('[SpeakTimeAssistant] failed: $e');
       return null;
     }
   }
 
-  VoiceIntentResult _toIntent(Map<String, dynamic> m) {
-    final kindRaw = (m['kind'] ?? '').toString().trim();
-    final kind = _kindFromString(kindRaw);
-    final confidenceNum = m['confidence'];
-    final conf = confidenceNum is num ? confidenceNum.toDouble() : 0.5;
+  VoiceIntentResult? _intentFromAssistantJson(Map<String, dynamic> m) {
+    if (!m.containsKey('kind')) {
+      return null;
+    }
+    final ks = (m['kind'] ?? '').toString().trim();
+    if (ks.isEmpty) {
+      return null;
+    }
+    final kind = _kindFromString(ks);
 
     String? clean(dynamic v) {
       if (v == null) {
@@ -164,8 +159,8 @@ Utterance:
 
     return VoiceIntentResult(
       kind: kind,
-      isFoodOrOrderingRelated: (m['isFoodOrOrderingRelated'] == true),
-      confidence: conf.clamp(0.0, 1.0),
+      isFoodOrOrderingRelated: true,
+      confidence: 0.75,
       extractedQuery: clean(m['extractedQuery']),
       restaurantName: clean(m['restaurantName']),
       itemName: clean(m['itemName']),

@@ -7,7 +7,7 @@ import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
 class SdLibRestaurantExploreFilters {
   const SdLibRestaurantExploreFilters({
     this.categoryId,
-    this.openNowOnly = false,
+    this.openNowOnly = true,
   });
 
   /// `null` means all categories.
@@ -350,7 +350,7 @@ class _SdLibFilterSheetBodyState extends State<_SdLibFilterSheetBody> {
   void _reset() {
     setState(() {
       _categoryId = null;
-      _openNowOnly = false;
+      _openNowOnly = true;
     });
   }
 

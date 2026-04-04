@@ -1,13 +1,15 @@
 import 'dart:async';
 
-import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
+import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:speak_dine/utils/customer_username_validation.dart';
 import 'package:speak_dine/utils/password_strength.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/widgets/auth_labeled_text_field.dart';
 import 'package:speak_dine/widgets/password_strength_indicator.dart';
+import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/services/google_auth_service.dart';
 import 'package:speak_dine/view/home/customer_shell.dart';
 import 'package:speak_dine/view/home/restaurant_shell.dart';
@@ -160,6 +162,30 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
     return null;
   }
 
+  Future<void> _deleteRollbackUser(User user) async {
+    try {
+      await user.delete();
+    } catch (_) {
+      // Rare; Auth user may need manual cleanup in console.
+    }
+  }
+
+  /// Sends verification mail; prefers custom continue URL, then Firebase default.
+  Future<void> _sendSignupVerificationEmail(User user) async {
+    try {
+      await user.sendEmailVerification(
+        ActionCodeSettings(
+          url: _emailVerificationContinueUrl,
+          handleCodeInApp: false,
+          androidPackageName: 'com.example.speak_dine',
+          androidMinimumVersion: '1',
+        ),
+      );
+    } catch (_) {
+      await user.sendEmailVerification();
+    }
+  }
+
   Future<void> _register() async {
     final error = _validate();
     if (error != null) {
@@ -185,58 +211,64 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
 
       // Block only real name collisions (another venue/customer still has a profile). Stale
       // [loginLookup] rows from deleted accounts are ignored here and reclaimed on verify.
-      if (_selectedRole == AccountRole.restaurant) {
-        final taken = await LoginLookupSync.isRestaurantNameInUseByAnotherVenue(
-          _firestore,
-          _nameController.text.trim(),
-          uid,
-        );
-        if (taken) {
-          try {
-            await user.delete();
-          } catch (_) {
-            // Rare; Auth user may need manual cleanup in console.
-          }
-          _showMessage(
-            'This restaurant name is already used for sign-in. Choose a different name.',
+      late final bool taken;
+      try {
+        if (_selectedRole == AccountRole.restaurant) {
+          taken = await LoginLookupSync.isRestaurantNameInUseByAnotherVenue(
+            _firestore,
+            _nameController.text.trim(),
+            uid,
           );
-          return;
-        }
-      } else {
-        final taken =
-            await LoginLookupSync.isCustomerUsernameInUseByAnotherAccount(
-          _firestore,
-          _nameController.text.trim(),
-          uid,
-        );
-        if (taken) {
-          try {
-            await user.delete();
-          } catch (_) {
-            // Rare; Auth user may need manual cleanup in console.
-          }
-          _showMessage(
-            'This username is already taken. Choose a different one.',
+        } else {
+          taken =
+              await LoginLookupSync.isCustomerUsernameInUseByAnotherAccount(
+            _firestore,
+            _nameController.text.trim(),
+            uid,
           );
-          return;
         }
+      } catch (e) {
+        await _deleteRollbackUser(user);
+        final detail = e is FirebaseException ? ' (${e.code})' : '';
+        _showMessage(
+          'Could not verify name availability. Check your connection and try again.$detail',
+        );
+        return;
       }
 
-      // 1) Create the Firebase Auth user.
-      // 2) Send email verification link (continue page has “Open Speak Dine” — see web/email_verified.html).
-      // 3) Only after verification we write Firestore profile data.
-      try {
-        await user.sendEmailVerification(
-          ActionCodeSettings(
-            url: _emailVerificationContinueUrl,
-            handleCodeInApp: false,
-            androidPackageName: 'com.example.speak_dine',
-            androidMinimumVersion: '1',
-          ),
+      if (taken) {
+        await _deleteRollbackUser(user);
+        _showMessage(
+          _selectedRole == AccountRole.restaurant
+              ? 'This restaurant name is already used for sign-in. Choose a different name.'
+              : 'This username is already taken. Choose a different one.',
         );
-      } catch (_) {
-        // Custom continue URL requires hosting + authorized domain; fall back to default email.
-        await user.sendEmailVerification();
+        return;
+      }
+
+      // If we create the Auth user but cannot send verification, roll back so the user
+      // can retry — otherwise the next attempt hits email-already-in-use and looks "wrong".
+      try {
+        await _sendSignupVerificationEmail(user);
+      } on FirebaseAuthException catch (e) {
+        await _deleteRollbackUser(user);
+        var message =
+            'Could not send the verification email. Check your internet connection and try again.';
+        if (e.code == 'too-many-requests') {
+          message = 'Too many requests. Wait a few minutes, then try again.';
+        }
+        _showMessage(message);
+        return;
+      } catch (e) {
+        await _deleteRollbackUser(user);
+        if (kDebugMode) {
+          debugPrint('[SignupView] sendEmailVerification failed: $e');
+        }
+        _showMessage(
+          'Could not send the verification email. If you are on the web, add this site '
+          'to Firebase Console → Authentication → Settings → Authorized domains, then try again.',
+        );
+        return;
       }
 
       if (!mounted) return;
@@ -253,12 +285,18 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
       if (e.code == 'weak-password') {
         message = 'Password is too weak. Please use a stronger one.';
       } else if (e.code == 'email-already-in-use') {
-        message = 'An account already exists with this email.';
+        message =
+            'This email is already registered in Firebase. Try logging in instead. '
+            'If a previous sign-up showed an error before you verified your email, the account '
+            'may still exist—use Forgot password on the login screen, or sign in with Google if you used that.';
       } else if (e.code == 'invalid-email') {
         message = 'Please enter a valid email address.';
       }
       _showMessage(message);
-    } catch (_) {
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[SignupView] _register unexpected: $e\n$st');
+      }
       _showMessage('Something went wrong. Please wait and try again later.');
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -283,6 +321,8 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
 
     final userDoc = await _firestore.collection('users').doc(uid).get();
     if (userDoc.exists && mounted) {
+      await cartService.restoreForCustomer(uid);
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const CustomerShell()),

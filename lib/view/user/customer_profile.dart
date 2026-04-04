@@ -15,6 +15,10 @@ import 'package:speak_dine/view/user/customer_orders_view.dart';
 import 'package:speak_dine/view/common/notifications_view.dart';
 import 'package:speak_dine/view/common/settings_view.dart';
 import 'package:speak_dine/view/common/help_support_view.dart';
+import 'package:speak_dine/services/cart_service.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
+
 class CustomerProfileView extends StatefulWidget {
   const CustomerProfileView({super.key});
 
@@ -44,14 +48,53 @@ class _CustomerProfileViewState extends State<CustomerProfileView> {
   String? _stripeCustomerId;
   List<SavedCard> _savedCards = [];
 
+  void _voiceOpenEditProfile() {
+    if (mounted) {
+      _openEditProfileSheet();
+    }
+  }
+
+  void _voiceOpenPaymentsPage() {
+    if (!mounted) {
+      return;
+    }
+    final theme = Theme.of(context);
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _CustomerPaymentsPage(
+          title: 'Payments & Cards',
+          child: _buildSavedCardsSection(theme),
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _loadProfile();
+    final b = CustomerVoiceBridge.instance;
+    b.openCustomerEditProfile = _voiceOpenEditProfile;
+    b.pickCustomerProfilePhoto = _pickAndUploadPhoto;
+    b.openCustomerAddressPicker = _openLocationPicker;
+    b.openCustomerPaymentsPage = _voiceOpenPaymentsPage;
   }
 
   @override
   void dispose() {
+    final b = CustomerVoiceBridge.instance;
+    if (b.openCustomerEditProfile == _voiceOpenEditProfile) {
+      b.openCustomerEditProfile = null;
+    }
+    if (b.pickCustomerProfilePhoto == _pickAndUploadPhoto) {
+      b.pickCustomerProfilePhoto = null;
+    }
+    if (b.openCustomerAddressPicker == _openLocationPicker) {
+      b.openCustomerAddressPicker = null;
+    }
+    if (b.openCustomerPaymentsPage == _voiceOpenPaymentsPage) {
+      b.openCustomerPaymentsPage = null;
+    }
     _nameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
@@ -255,6 +298,7 @@ class _CustomerProfileViewState extends State<CustomerProfileView> {
   }
 
   Future<void> _logout() async {
+    await cartService.clearSessionForSignOut();
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -288,7 +332,23 @@ class _CustomerProfileViewState extends State<CustomerProfileView> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => const CustomerOrdersView(),
+                        builder: (ctx) => Scaffold(
+                          backgroundColor:
+                              Theme.of(ctx).colorScheme.background,
+                          child: SafeArea(
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                const Positioned.fill(
+                                  child: CustomerOrdersView(
+                                      showBackButton: true),
+                                ),
+                                const CustomerVoiceFabPositioned(
+                                    hasBottomDock: false),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     );
                   },
@@ -863,33 +923,39 @@ class _CustomerPaymentsPage extends StatelessWidget {
     final theme = Theme.of(context);
     return Scaffold(
       child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GhostButton(
-                    density: ButtonDensity.compact,
-                    onPressed: () => Navigator.pop(context),
-                    child: const Icon(RadixIcons.arrowLeft, size: 16),
+                  Row(
+                    children: [
+                      GhostButton(
+                        density: ButtonDensity.compact,
+                        onPressed: () => Navigator.pop(context),
+                        child: const Icon(RadixIcons.arrowLeft, size: 16),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(title).h4().semiBold(),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Text(title).h4().semiBold(),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: DefaultTextStyle.merge(
+                        style: TextStyle(color: theme.colorScheme.foreground),
+                        child: child,
+                      ),
+                    ),
+                  ),
                 ],
               ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: DefaultTextStyle.merge(
-                    style: TextStyle(color: theme.colorScheme.foreground),
-                    child: child,
-                  ),
-                ),
-              ),
-            ],
-          ),
+            ),
+            const CustomerVoiceFabPositioned(hasBottomDock: false),
+          ],
         ),
       ),
     );

@@ -10,7 +10,9 @@ import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
 import 'package:speak_dine/utils/restaurant_hours.dart';
 import 'package:speak_dine/widgets/sd_lib_restaurant_search_filters.dart';
 import 'package:speak_dine/utils/city_normalize.dart';
+import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/voice/voice_intent_router.dart';
 
 class UserHomeView extends StatefulWidget {
   final VoidCallback? onCartChanged;
@@ -27,6 +29,8 @@ class _UserHomeViewState extends State<UserHomeView> {
   final TextEditingController _searchController = TextEditingController();
   SdLibRestaurantExploreFilters _exploreFilters =
       const SdLibRestaurantExploreFilters();
+  /// Voice / explore sort: default | rating | price_low | price_high | name
+  String _voiceSortKey = 'default';
 
   @override
   void initState() {
@@ -35,6 +39,8 @@ class _UserHomeViewState extends State<UserHomeView> {
     bridge.applySearchQuery = _voiceApplySearchQuery;
     bridge.applyCategoryId = _voiceApplyCategoryId;
     bridge.openRestaurantByName = _voiceOpenRestaurantByName;
+    bridge.openExploreFilters = _voiceOpenExploreFilters;
+    bridge.applyRestaurantSort = _voiceApplySortKey;
   }
 
   @override
@@ -49,15 +55,96 @@ class _UserHomeViewState extends State<UserHomeView> {
     if (bridge.openRestaurantByName == _voiceOpenRestaurantByName) {
       bridge.openRestaurantByName = null;
     }
+    if (bridge.openExploreFilters == _voiceOpenExploreFilters) {
+      bridge.openExploreFilters = null;
+    }
+    if (bridge.applyRestaurantSort == _voiceApplySortKey) {
+      bridge.applyRestaurantSort = null;
+    }
     _searchController.dispose();
     super.dispose();
   }
 
+  /// Voice must not await the sheet — otherwise TTS waits until the sheet closes.
+  Future<void> _voiceOpenExploreFilters() async {
+    if (!mounted) {
+      return;
+    }
+    final theme = Theme.of(context);
+    showSdLibRestaurantFilterSheet(
+      context,
+      theme: theme,
+      initial: _exploreFilters,
+    ).then((result) {
+      if (result != null && mounted) {
+        setState(() => _exploreFilters = result);
+      }
+    });
+  }
+
+  void _voiceApplySortKey(String rawKey) {
+    if (!mounted) {
+      return;
+    }
+    final k = rawKey.toLowerCase().trim();
+    setState(() {
+      if (k.contains('rating')) {
+        _voiceSortKey = 'rating';
+      } else if (k.contains('price_high') || k.contains('expensive')) {
+        _voiceSortKey = 'price_high';
+      } else if (k.contains('price_low') ||
+          k.contains('cheap') ||
+          (k.contains('price') && !k.contains('high'))) {
+        _voiceSortKey = 'price_low';
+      } else if (k.contains('name') || k.contains('alphabet')) {
+        _voiceSortKey = 'name';
+      } else {
+        _voiceSortKey = 'default';
+      }
+    });
+  }
+
+  List<QueryDocumentSnapshot<Object?>> _sortRestaurantDocs(
+    List<QueryDocumentSnapshot<Object?>> docs,
+  ) {
+    if (_voiceSortKey == 'default') {
+      return docs;
+    }
+    final copy = List<QueryDocumentSnapshot<Object?>>.from(docs);
+    double ratingOf(QueryDocumentSnapshot<Object?> d) {
+      return ((d.data() as Map<String, dynamic>)['averageRating'] as num?)
+              ?.toDouble() ??
+          0;
+    }
+
+    String nameOf(QueryDocumentSnapshot<Object?> d) {
+      final m = d.data() as Map<String, dynamic>;
+      return (m['restaurantName'] ?? m['name'] ?? '').toString().toLowerCase();
+    }
+
+    switch (_voiceSortKey) {
+      case 'rating':
+        copy.sort((a, b) => ratingOf(b).compareTo(ratingOf(a)));
+      case 'price_low':
+        copy.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+      case 'price_high':
+        copy.sort((a, b) => nameOf(b).compareTo(nameOf(a)));
+      case 'name':
+        copy.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+      default:
+        break;
+    }
+    return copy;
+  }
+
   void _voiceApplySearchQuery(String query) {
     if (!mounted) return;
+    final trimmed = query.trim();
+    final cleaned =
+        VoiceIntentRouter.normalizeExploreSearchQuery(trimmed) ?? trimmed;
     _searchController.value = TextEditingValue(
-      text: query,
-      selection: TextSelection.collapsed(offset: query.length),
+      text: cleaned,
+      selection: TextSelection.collapsed(offset: cleaned.length),
     );
   }
 
@@ -66,7 +153,7 @@ class _UserHomeViewState extends State<UserHomeView> {
     setState(() {
       _exploreFilters = SdLibRestaurantExploreFilters(
         categoryId: categoryId,
-        openNowOnly: _exploreFilters.openNowOnly,
+        openNowOnly: true,
       );
     });
   }
@@ -98,14 +185,23 @@ class _UserHomeViewState extends State<UserHomeView> {
       final rName = (data['restaurantName'] ??
               data['name'] ??
               data['businessName'] ??
+              data['signInRestaurantName'] ??
               '')
           .toString();
       final lower = rName.toLowerCase();
+      final lowerAlnum = exploreSearchAlnumLower(lower);
+      final needleAlnum = exploreSearchAlnumLower(nameNeedle);
       var score = 0;
       if (lower == nameNeedle) {
         score = 100;
       } else if (lower.contains(nameNeedle)) {
         score = 80;
+      } else if (needleAlnum.length >= 2 &&
+          lowerAlnum == needleAlnum) {
+        score = 95;
+      } else if (needleAlnum.length >= 2 &&
+          lowerAlnum.contains(needleAlnum)) {
+        score = 85;
       } else if (nameNeedle.contains(lower.split(' ').first) &&
           lower.split(' ').first.length > 2) {
         score = 60;
@@ -154,6 +250,7 @@ class _UserHomeViewState extends State<UserHomeView> {
   }
 
   Future<void> _logout() async {
+    await cartService.clearSessionForSignOut();
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -417,7 +514,9 @@ class _UserHomeViewState extends State<UserHomeView> {
                             .where((d) =>
                                 _passesExploreFilters(d, userCityKey, searchQuery))
                             .toList();
-                        if (restaurants.isEmpty) {
+                        final sortedRestaurants =
+                            _sortRestaurantDocs(restaurants);
+                        if (sortedRestaurants.isEmpty) {
                           return Center(
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
@@ -443,12 +542,12 @@ class _UserHomeViewState extends State<UserHomeView> {
                         }
                         return ListView.separated(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: restaurants.length,
+                          itemCount: sortedRestaurants.length,
                           separatorBuilder: (_, __) => const SizedBox(height: 12),
                           itemBuilder: (context, index) {
-                            final restaurant = restaurants[index].data()
+                            final restaurant = sortedRestaurants[index].data()
                                 as Map<String, dynamic>;
-                            final restaurantId = restaurants[index].id;
+                            final restaurantId = sortedRestaurants[index].id;
                             return _buildRestaurantCard(
                                 theme, restaurant, restaurantId);
                           },

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 /// Ported from SD-lib `CustomerHelpView` (layout preserved, theme-adapted).
 class HelpSupportView extends StatelessWidget {
@@ -27,45 +28,51 @@ class HelpSupportView extends StatelessWidget {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildContactSection(theme),
-            const SizedBox(height: 32),
-            Text(
-              "Frequently Asked Questions",
-              style: TextStyle(
-                color: theme.colorScheme.onSurface,
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                letterSpacing: 0.5,
-              ),
+      body: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildContactSection(theme),
+                const SizedBox(height: 32),
+                Text(
+                  "Frequently Asked Questions",
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildFAQTile(
+                  theme,
+                  "How do I track my order?",
+                  "You can track your order in the 'Order History' section of your profile.",
+                ),
+                _buildFAQTile(
+                  theme,
+                  "What payment methods are accepted?",
+                  "We accept credit/debit cards and cash on delivery.",
+                ),
+                _buildFAQTile(
+                  theme,
+                  "Can I cancel my order?",
+                  "Orders can be cancelled within 5 minutes of placing them.",
+                ),
+                _buildFAQTile(
+                  theme,
+                  "How to change delivery address?",
+                  "Go to 'My Addresses' in your profile to update or add new locations.",
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            _buildFAQTile(
-              theme,
-              "How do I track my order?",
-              "You can track your order in the 'Order History' section of your profile.",
-            ),
-            _buildFAQTile(
-              theme,
-              "What payment methods are accepted?",
-              "We accept credit/debit cards and cash on delivery.",
-            ),
-            _buildFAQTile(
-              theme,
-              "Can I cancel my order?",
-              "Orders can be cancelled within 5 minutes of placing them.",
-            ),
-            _buildFAQTile(
-              theme,
-              "How to change delivery address?",
-              "Go to 'My Addresses' in your profile to update or add new locations.",
-            ),
-          ],
-        ),
+          ),
+          const CustomerVoiceFabPositioned(hasBottomDock: false),
+        ],
       ),
     );
   }

@@ -62,6 +62,8 @@ String _restaurantSearchBlob(Map<String, dynamic> data) {
     'restaurantName',
     'name',
     'businessName',
+    'signInRestaurantName',
+    'displayName',
     'description',
     'address',
     'city',
@@ -71,6 +73,12 @@ String _restaurantSearchBlob(Map<String, dynamic> data) {
     if (s.isNotEmpty) parts.add(s);
   }
   return parts.join(' ').toLowerCase();
+}
+
+/// Lowercase Latin letters and digits only — for acronym / punctuation-insensitive match
+/// (`jbs` ↔ `JBS`, `J.B.S.`).
+String exploreSearchAlnumLower(String raw) {
+  return raw.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
 }
 
 /// Case-insensitive match on substring and per-word prefixes (e.g. `jay` → “Jay Bees”).
@@ -83,6 +91,10 @@ bool restaurantMatchesExploreSearch(
   final blob = _restaurantSearchBlob(data);
   if (blob.contains(q)) return true;
 
+  final qAlnum = exploreSearchAlnumLower(q);
+  final blobAlnum = exploreSearchAlnumLower(blob);
+  if (qAlnum.length >= 2 && blobAlnum.contains(qAlnum)) return true;
+
   final qTokens =
       q.split(' ').where((t) => t.isNotEmpty).toList();
   if (qTokens.isEmpty) return true;
@@ -94,6 +106,8 @@ bool restaurantMatchesExploreSearch(
 
   bool tokenMatches(String qt) {
     if (blob.contains(qt)) return true;
+    final qtA = exploreSearchAlnumLower(qt);
+    if (qtA.length >= 2 && blobAlnum.contains(qtA)) return true;
     return words.any((w) => w.startsWith(qt) || w.contains(qt));
   }
 

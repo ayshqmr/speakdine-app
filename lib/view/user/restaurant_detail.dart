@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:flutter/material.dart' as material
     show AlwaysScrollableScrollPhysics, MaterialPageRoute, RefreshIndicator, SingleChildScrollView;
@@ -8,7 +10,11 @@ import 'package:speak_dine/services/cart_service.dart';
 import 'package:speak_dine/utils/pkr_format.dart';
 import 'package:speak_dine/widgets/menu_item_network_image.dart';
 import 'package:speak_dine/constants/menu_dish_category.dart';
+import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
+import 'package:speak_dine/voice/customer_voice_bridge.dart';
 import 'package:intl/intl.dart';
+
+enum _MenuVoiceFactKind { price, description }
 
 class RestaurantDetailView extends StatefulWidget {
   final String restaurantId;
@@ -31,19 +37,510 @@ class RestaurantDetailView extends StatefulWidget {
 class _RestaurantDetailViewState extends State<RestaurantDetailView> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   late Stream<QuerySnapshot<Map<String, dynamic>>> _menuStream;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _latestMenuDocs = [];
+
+  /// Filled from Firestore for the header above reviews (replaces static "Menu" label).
+  String? _restaurantCategoryLabel;
+  String? _restaurantDescription;
+
+  /// One auto voice intro per visit (description + reviews question).
+  bool _scheduledRestaurantVoiceIntro = false;
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _voiceRestaurantDocSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _voiceReviewsSub;
+
+  late final Future<String?> Function() _voiceConfirmAddClosure =
+      _confirmVoiceAddToCartFromMenu;
 
   @override
   void initState() {
     super.initState();
     _menuStream = _menuQuery.snapshots();
+    final b = CustomerVoiceBridge.instance;
+    b.confirmVoiceAddToCartFromMenu = _voiceConfirmAddClosure;
+    b.speakableMenuItemsForVoice = _speakableMenuItemsForVoice;
+    b.answerMenuItemVoiceFact = _answerMenuItemVoiceFact;
+    b.restaurantVoiceMenuIntroShown = false;
+    b.restaurantVoiceDetailDisplayName = widget.restaurantName;
+    b.restaurantMenuIntroSpeech =
+        "You're now in ${widget.restaurantName}. "
+        'Would you like to hear the latest reviews?';
+    _attachVoiceRestaurantContext();
+  }
+
+  void _scheduleRestaurantVoiceIntroOnce() {
+    if (_scheduledRestaurantVoiceIntro || !mounted) {
+      return;
+    }
+    final play = CustomerVoiceBridge.instance.playRestaurantDetailVoiceIntro;
+    if (play == null) {
+      return;
+    }
+    _scheduledRestaurantVoiceIntro = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(play());
+    });
+  }
+
+  void _attachVoiceRestaurantContext() {
+    final b = CustomerVoiceBridge.instance;
+    _voiceRestaurantDocSub = _firestore
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      if (!snap.exists || snap.data() == null) {
+        b.restaurantVoiceProfileSummary = null;
+        b.restaurantVoiceCategoryPlain = null;
+        b.restaurantVoiceDescriptionPlain = null;
+        b.restaurantMenuIntroSpeech =
+            "You're now in ${widget.restaurantName}. "
+            'Would you like to hear the latest reviews?';
+        setState(() {
+          _restaurantCategoryLabel = null;
+          _restaurantDescription = null;
+        });
+        return;
+      }
+      final m = snap.data()!;
+      final desc = (m['description'] ?? '').toString().trim();
+      final catId = m['restaurantCategory'] as String?;
+      final catLabel = sdLibRestaurantCategoryLabel(catId);
+      final catDisplay =
+          (catLabel != null && catLabel.isNotEmpty) ? catLabel : null;
+      final descDisplay = desc.isNotEmpty ? desc : null;
+      setState(() {
+        _restaurantCategoryLabel = catDisplay;
+        _restaurantDescription = descDisplay;
+      });
+      final parts = <String>[
+        'You are in restaurant "${widget.restaurantName}".',
+        if (catDisplay != null) 'Category: $catDisplay.',
+        if (descDisplay != null) 'Description: $descDisplay.',
+      ];
+      b.restaurantVoiceProfileSummary = parts.join(' ');
+
+      final introParts = <String>[
+        "You're now in ${widget.restaurantName}.",
+        if (catDisplay != null) 'The category is $catDisplay.',
+        if (descDisplay != null) 'Description: $descDisplay.',
+      ];
+      b.restaurantMenuIntroSpeech =
+          '${introParts.join(' ')} Would you like to hear the latest reviews?';
+      b.restaurantVoiceCategoryPlain = catDisplay;
+      b.restaurantVoiceDescriptionPlain = descDisplay;
+      _scheduleRestaurantVoiceIntroOnce();
+    });
+
+    _voiceReviewsSub = _firestore
+        .collection('restaurants')
+        .doc(widget.restaurantId)
+        .collection('reviews')
+        .orderBy('createdAt', descending: true)
+        .limit(3)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      if (snap.docs.isEmpty) {
+        b.restaurantVoiceReviewsSummary =
+            'No reviews yet for ${widget.restaurantName}.';
+        return;
+      }
+      b.restaurantVoiceReviewsSummary = _voiceFormatReviews(snap.docs);
+    });
+  }
+
+  String _voiceFormatReviews(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final buf = StringBuffer();
+    for (var i = 0; i < docs.length; i++) {
+      final r = docs[i].data();
+      final rawRating = r['rating'];
+      final rating = rawRating is num
+          ? rawRating.round().clamp(0, 5)
+          : int.tryParse('$rawRating') ?? 0;
+      final comment = (r['comment'] as String? ?? '').trim();
+      buf.write('Review ${i + 1}. ');
+      buf.write('$rating out of 5 stars.');
+      if (comment.isNotEmpty) {
+        buf.write(' $comment');
+      }
+      if (i < docs.length - 1) {
+        buf.write(' ');
+      }
+    }
+    return buf.toString().trim();
   }
 
   @override
   void didUpdateWidget(RestaurantDetailView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.restaurantId != widget.restaurantId) {
+      _voiceRestaurantDocSub?.cancel();
+      _voiceReviewsSub?.cancel();
       _menuStream = _menuQuery.snapshots();
+      _latestMenuDocs = [];
+      _scheduledRestaurantVoiceIntro = false;
+      CustomerVoiceBridge.instance.restaurantVoiceDetailDisplayName =
+          widget.restaurantName;
+      _attachVoiceRestaurantContext();
     }
+  }
+
+  @override
+  void dispose() {
+    final b = CustomerVoiceBridge.instance;
+    if (b.confirmVoiceAddToCartFromMenu == _voiceConfirmAddClosure) {
+      b.confirmVoiceAddToCartFromMenu = null;
+    }
+    if (b.speakableMenuItemsForVoice == _speakableMenuItemsForVoice) {
+      b.speakableMenuItemsForVoice = null;
+    }
+    if (b.answerMenuItemVoiceFact == _answerMenuItemVoiceFact) {
+      b.answerMenuItemVoiceFact = null;
+    }
+    b.restaurantMenuVoiceSummary = null;
+    b.restaurantVoiceProfileSummary = null;
+    b.restaurantVoiceReviewsSummary = null;
+    b.restaurantMenuIntroSpeech = null;
+    b.restaurantVoiceMenuIntroShown = false;
+    b.voiceAwaitingRestaurantReviewsYesNo = false;
+    b.restaurantVoiceDetailDisplayName = null;
+    b.restaurantVoiceCategoryPlain = null;
+    b.restaurantVoiceDescriptionPlain = null;
+    _voiceRestaurantDocSub?.cancel();
+    _voiceReviewsSub?.cancel();
+    super.dispose();
+  }
+
+  Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _groupMenuDocsForVoice(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final grouped = {
+      for (final id in MenuDishCategory.idsInMenuOrder)
+        id: <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+    };
+    for (final doc in docs) {
+      final cat = MenuDishCategory.normalizeId(doc.data()['dishCategory']);
+      grouped[cat]!.add(doc);
+    }
+    for (final list in grouped.values) {
+      list.sort((a, b) {
+        final na = (a.data()['name'] ?? '').toString().toLowerCase();
+        final nb = (b.data()['name'] ?? '').toString().toLowerCase();
+        return na.compareTo(nb);
+      });
+    }
+    return grouped;
+  }
+
+  String? _speakableMenuItemsForVoice({String? categoryKey}) {
+    if (_latestMenuDocs.isEmpty) {
+      return 'The menu is still loading. Try again in a moment.';
+    }
+    const maxItems = 24;
+    final grouped = _groupMenuDocsForVoice(_latestMenuDocs);
+
+    String formatSection(
+      String heading,
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    ) {
+      if (docs.isEmpty) {
+        return '';
+      }
+      final slice =
+          docs.length > maxItems ? docs.sublist(0, maxItems) : docs;
+      final parts = slice.map((doc) {
+        final data = doc.data();
+        final name = (data['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          return null;
+        }
+        final desc = (data['description'] ?? '').toString().trim();
+        return desc.isNotEmpty ? '$name: $desc' : name;
+      }).whereType<String>();
+      final buf = StringBuffer('Here are the $heading. ');
+      buf.write(parts.join('. '));
+      buf.write('.');
+      if (docs.length > maxItems) {
+        buf.write(' More items are on the screen.');
+      }
+      return buf.toString();
+    }
+
+    if (categoryKey != null) {
+      if (!MenuDishCategory.idsInMenuOrder.contains(categoryKey)) {
+        return null;
+      }
+      final docs = grouped[categoryKey]!;
+      if (docs.isEmpty) {
+        return 'There are no ${MenuDishCategory.sectionHeadingFor(categoryKey).toLowerCase()} on this menu yet.';
+      }
+      return formatSection(
+        MenuDishCategory.sectionHeadingFor(categoryKey),
+        docs,
+      );
+    }
+
+    final sections = <String>[];
+    for (final id in MenuDishCategory.idsInMenuOrder) {
+      final docs = grouped[id]!;
+      if (docs.isEmpty) {
+        continue;
+      }
+      sections.add(formatSection(MenuDishCategory.sectionHeadingFor(id), docs));
+    }
+    if (sections.isEmpty) {
+      return 'This menu has no items yet.';
+    }
+    return sections.join(' ');
+  }
+
+  String _voiceMenuSummaryFromGrouped(
+    Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> grouped,
+  ) {
+    final buf = StringBuffer(
+      'Restaurant "${widget.restaurantName}" menu snapshot:\n',
+    );
+    var sections = 0;
+    for (final catId in MenuDishCategory.idsInMenuOrder) {
+      if (sections >= 6) {
+        break;
+      }
+      final sectionDocs = grouped[catId]!;
+      if (sectionDocs.isEmpty) {
+        continue;
+      }
+      final heading = MenuDishCategory.sectionHeadingFor(catId);
+      final names = sectionDocs
+          .take(5)
+          .map((d) => (d.data()['name'] ?? '').toString().trim())
+          .where((s) => s.isNotEmpty)
+          .join(', ');
+      if (names.isEmpty) {
+        continue;
+      }
+      buf.writeln('$heading — examples: $names.');
+      sections++;
+    }
+    buf.writeln(
+      '\nAll menu items (authoritative for price and description; read prices exactly as shown):',
+    );
+    for (final catId in MenuDishCategory.idsInMenuOrder) {
+      final sectionDocs = grouped[catId]!;
+      if (sectionDocs.isEmpty) {
+        continue;
+      }
+      buf.writeln('[${MenuDishCategory.sectionHeadingFor(catId)}]');
+      for (final d in sectionDocs) {
+        final data = d.data();
+        final name = (data['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          continue;
+        }
+        final desc = (data['description'] ?? '').toString().trim();
+        buf.write('- $name · ${formatPkr(data['price'])}');
+        if (desc.isNotEmpty) {
+          buf.write(' · $desc');
+        }
+        buf.writeln();
+      }
+    }
+    return buf.toString().trim();
+  }
+
+  String? _answerMenuItemVoiceFact(String utterance) {
+    if (_latestMenuDocs.isEmpty) {
+      return null;
+    }
+    final lower = utterance.toLowerCase().trim();
+    final kind = _voiceDetectMenuFactKind(lower);
+    if (kind == null) {
+      return null;
+    }
+    final fragment = _voiceExtractMenuItemFragment(lower);
+    if (fragment == null || fragment.trim().length < 2) {
+      return 'Which dish? Say the item name together with price or description.';
+    }
+    if (RegExp(
+      r'\b(reviews?|ratings?|restaurant|the\s+menu|this\s+place)\b',
+    ).hasMatch(fragment)) {
+      return null;
+    }
+    if (_voiceFragmentIsMenuSectionOnly(fragment)) {
+      return null;
+    }
+    final doc = _voiceBestMenuDocMatch(fragment);
+    if (doc == null) {
+      return 'I could not find that dish on this menu. Say the name as listed, or tap the item.';
+    }
+    final data = doc.data();
+    final name = (data['name'] ?? 'That item').toString().trim();
+    if (name.isEmpty) {
+      return null;
+    }
+    if (kind == _MenuVoiceFactKind.price) {
+      return '$name is ${formatPkr(data['price'])}.';
+    }
+    final desc = (data['description'] ?? '').toString().trim();
+    if (desc.isEmpty) {
+      return '$name does not have a description on this menu.';
+    }
+    return '$name: $desc';
+  }
+
+  _MenuVoiceFactKind? _voiceDetectMenuFactKind(String lower) {
+    final priceHits = [
+      RegExp(r'\bhow\s+much\b'),
+      RegExp(r'\bprice\b'),
+      RegExp(r'\bcost\b'),
+      RegExp(r'\bpricing\b'),
+      RegExp(r'\brate\b'),
+      RegExp(r'\brupees?\b'),
+      RegExp(r'\brs\.?\b'),
+      RegExp(r'\bpkr\b'),
+    ].where((r) => r.hasMatch(lower)).length;
+    final descHits = [
+      RegExp(r'\bdescription\b'),
+      RegExp(r'\bdiscription\b'),
+      RegExp(r'\bdescribe\b'),
+      RegExp(r'\bdetails?\b'),
+      RegExp(r'\bingredients?\b'),
+      RegExp(r"what's\s+in\b"),
+      RegExp(r'\bwhats\s+in\b'),
+      RegExp(r'\btell\s+me\s+about\b'),
+      RegExp(r'\binfo\s+on\b'),
+    ].where((r) => r.hasMatch(lower)).length;
+    if (priceHits == 0 && descHits == 0) {
+      return null;
+    }
+    if (priceHits >= descHits) {
+      return _MenuVoiceFactKind.price;
+    }
+    return _MenuVoiceFactKind.description;
+  }
+
+  String? _voiceExtractMenuItemFragment(String lower) {
+    final patterns = <RegExp>[
+      RegExp(r'^how\s+much\s+(?:is|for|does)\s+(?:the\s+)?(.+)$'),
+      RegExp(r"^what(?:'s|s| is)\s+the\s+(?:price|cost)\s+(?:of|for)\s+(.+)$"),
+      RegExp(r'^what(?:\s+is)?\s+(?:the\s+)?(?:price|cost)\s+(?:of|for)\s+(.+)$'),
+      RegExp(r"^(?:what(?:'s|s| is)|tell\s+me)\s+(?:the\s+)?price\s+(?:of|for)\s+(.+)$"),
+      RegExp(r'^(.+?)\s+(?:price|cost|pricing)\s*$'),
+      RegExp(r'^(?:price|cost|pricing)\s+(?:of|for)\s+(.+)$'),
+      RegExp(
+        r'^(?:describe|description|discription|details?)\s+(?:the\s+)?(?:item\s+)?(.+)$',
+      ),
+      RegExp(r'^(.+?)\s+(?:description|discription|details?)\s*$'),
+      RegExp(r'^tell\s+me\s+about\s+(.+)$'),
+      RegExp(r'^info\s+on\s+(.+)$'),
+      RegExp(r"^what(?:'s|s| is)\s+in\s+(?:the\s+)?(.+)$"),
+    ];
+    for (final re in patterns) {
+      final m = re.firstMatch(lower);
+      if (m != null && m.groupCount >= 1) {
+        final g = m.group(1)?.trim();
+        if (g != null && g.isNotEmpty) {
+          return g;
+        }
+      }
+    }
+    final stripped = lower
+        .replaceAll(
+          RegExp(
+            r'\b(how\s+much|price|cost|pricing|rate|rs\.?|pkr|rupees?|description|discription|describe|details?|ingredients?|tell\s+me\s+about|info\s+on|whats\s+in)\b',
+          ),
+          ' ',
+        )
+        .replaceAll(RegExp(r"\bwhat's\s+in\b"), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return stripped.isEmpty ? null : stripped;
+  }
+
+  bool _voiceFragmentIsMenuSectionOnly(String fragment) {
+    final f = fragment.toLowerCase().trim();
+    const sections = {
+      'appetizer',
+      'appetisers',
+      'appetizers',
+      'starter',
+      'starters',
+      'first course',
+      'main',
+      'mains',
+      'main course',
+      'main courses',
+      'entree',
+      'entrees',
+      'dessert',
+      'desserts',
+      'sweet',
+      'sweets',
+      'afters',
+      'drink',
+      'drinks',
+      'beverage',
+      'beverages',
+    };
+    return sections.contains(f);
+  }
+
+  QueryDocumentSnapshot<Map<String, dynamic>>? _voiceBestMenuDocMatch(
+    String fragment,
+  ) {
+    final f = fragment.toLowerCase().trim();
+    if (f.isEmpty) {
+      return null;
+    }
+    final docs = _latestMenuDocs;
+    for (final d in docs) {
+      final name =
+          (d.data()['name'] ?? '').toString().toLowerCase().trim();
+      if (name.isNotEmpty && name == f) {
+        return d;
+      }
+    }
+    for (final d in docs) {
+      final name =
+          (d.data()['name'] ?? '').toString().toLowerCase().trim();
+      if (name.isNotEmpty && name.contains(f)) {
+        return d;
+      }
+    }
+    for (final d in docs) {
+      final name =
+          (d.data()['name'] ?? '').toString().toLowerCase().trim();
+      if (name.length >= 3 && f.contains(name)) {
+        return d;
+      }
+    }
+    final ftokens =
+        f.split(RegExp(r'\s+')).where((t) => t.length > 1).toSet();
+    if (ftokens.isEmpty) {
+      return null;
+    }
+    QueryDocumentSnapshot<Map<String, dynamic>>? best;
+    var bestScore = 0;
+    for (final d in docs) {
+      final name =
+          (d.data()['name'] ?? '').toString().toLowerCase().trim();
+      final ntokens =
+          name.split(RegExp(r'\s+')).where((t) => t.length > 1).toSet();
+      final overlap = ftokens.intersection(ntokens).length;
+      if (overlap > bestScore) {
+        bestScore = overlap;
+        best = d;
+      }
+    }
+    return bestScore > 0 ? best : null;
   }
 
   CollectionReference<Map<String, dynamic>> get _menuQuery => _firestore
@@ -67,6 +564,51 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
     });
     widget.onCartChanged?.call();
     showAppToast(context, '${item['name']} added to cart');
+  }
+
+  /// Voice: add [CustomerVoiceBridge.pendingVoiceCartItem] if it matches a menu line.
+  Future<String?> _confirmVoiceAddToCartFromMenu() async {
+    final bridge = CustomerVoiceBridge.instance;
+    final needle = (bridge.pendingVoiceCartItem ?? '').toLowerCase().trim();
+    if (needle.isEmpty) {
+      return 'Say what to add first, for example add burger to cart.';
+    }
+    if (_latestMenuDocs.isEmpty) {
+      return 'Menu is still loading. Try again in a second.';
+    }
+    QueryDocumentSnapshot<Map<String, dynamic>>? best;
+    var bestScore = 0;
+    for (final doc in _latestMenuDocs) {
+      final name = (doc.data()['name'] ?? '').toString().toLowerCase();
+      if (name.isEmpty) {
+        continue;
+      }
+      var score = 0;
+      if (name == needle) {
+        score = 100;
+      } else if (name.contains(needle) || needle.contains(name)) {
+        score = 85;
+      } else {
+        for (final w in needle.split(RegExp(r'\s+')).where((e) => e.length > 2)) {
+          if (name.contains(w)) {
+            score = 75;
+          }
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = doc;
+      }
+    }
+    if (best == null || bestScore < 75) {
+      return 'No menu item matched. Tap the plus button next to your dish.';
+    }
+    if (!mounted) {
+      return 'Try again.';
+    }
+    _addToCart(best.data(), best.id);
+    bridge.clearPendingVoiceCartItem();
+    return null;
   }
 
   @override
@@ -109,7 +651,7 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
         const SizedBox(height: 16),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: const Text('Menu').semiBold(),
+          child: _buildRestaurantInfoHeader(theme),
         ),
         const SizedBox(height: 12),
         Expanded(
@@ -124,6 +666,7 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
                 debugPrint(
                     '[RestaurantDetail] Menu stream error: ${snapshot.error}');
                 WidgetsBinding.instance.addPostFrameCallback((_) {
+                  CustomerVoiceBridge.instance.restaurantMenuVoiceSummary = null;
                   if (context.mounted) {
                     showAppToast(
                         context, 'Unable to load menu. Please try again.');
@@ -142,6 +685,9 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
                 );
               }
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  CustomerVoiceBridge.instance.restaurantMenuVoiceSummary = null;
+                });
                 return material.RefreshIndicator(
                   onRefresh: _refreshMenuFromServer,
                   child: SingleChildScrollView(
@@ -175,6 +721,7 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
               final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
                 snapshot.data!.docs,
               );
+              _latestMenuDocs = docs;
               final grouped = {
                 for (final id in MenuDishCategory.idsInMenuOrder)
                   id: <QueryDocumentSnapshot<Map<String, dynamic>>>[],
@@ -193,6 +740,8 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
                   return na.compareTo(nb);
                 });
               }
+              CustomerVoiceBridge.instance.restaurantMenuVoiceSummary =
+                  _voiceMenuSummaryFromGrouped(grouped);
               var isFirstSection = true;
               final sectionChildren = <Widget>[];
               for (final catId in MenuDishCategory.idsInMenuOrder) {
@@ -244,6 +793,52 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
             },
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildRestaurantInfoHeader(ThemeData theme) {
+    final cat = _restaurantCategoryLabel;
+    final desc = _restaurantDescription;
+    if ((cat == null || cat.isEmpty) && (desc == null || desc.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (cat != null && cat.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: theme.colorScheme.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Text(
+              cat,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: theme.colorScheme.primary,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        if (desc != null && desc.isNotEmpty) ...[
+          SizedBox(height: cat != null && cat.isNotEmpty ? 10 : 0),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Description: ').semiBold().small(),
+              Expanded(
+                child: Text(desc).muted().small(),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }

@@ -1,28 +1,50 @@
-/// High-level intent for food / ordering / in-app customer flows.
+/// Voice intents focused on add-to-cart flow, safe checkout, settings, and recovery.
 enum VoiceIntentKind {
-  /// Clearly not about food, restaurants, or this app.
+  // system
   nonFood,
-
-  /// Heard something but could not map to a specific flow.
   unknown,
+  cancelAction,
 
-  /// Hours, address, location, "about" a place.
-  restaurantInfo,
+  // add to cart flow
+  addToCartRequest,
+  selectMenuItem,
+  confirmAddToCart,
 
-  /// Dish details: ingredients, spicy, what is X, price of item.
-  dishDescription,
+  // cart
+  openCartIntent,
 
-  /// Browse by cuisine / SD-lib category (Desi, Pizza, …).
-  categoryBrowse,
+  /// Multi-clause edits, e.g. "add one more coffee and remove sandwich".
+  cartNaturalLanguageEdit,
 
-  /// User's own account: name, address, orders, payments.
-  userProfile,
+  // order safety (never auto-submits payment)
+  initiateCheckout,
+  confirmOrderUIOnly,
+  cancelCheckout,
 
-  /// Cart, checkout, pay, place order, add to cart.
-  orderPlacement,
+  // settings
+  openSettings,
+  toggleSetting,
+  updateSettingValue,
+
+  // disambiguation
+  addToCartIntent,
+  ambiguousOrderIntent,
+
+  // navigation
+  goHome,
+  goBack,
+  whereAmI,
+
+  /// Open live order tracking for the latest active order and speak status + ETA.
+  trackOrderIntent,
+
+  // guidance
+  suggestNextAction,
+  clarifyUserIntent,
+  cancelCurrentFlow,
 }
 
-/// Output of [VoiceIntentClassifier] after final STT text is available.
+/// Output of classifiers after STT (or LLM) text is available.
 class VoiceIntentResult {
   const VoiceIntentResult({
     required this.kind,
@@ -32,24 +54,32 @@ class VoiceIntentResult {
     this.restaurantName,
     this.itemName,
     this.categoryId,
+    this.settingKey,
+    this.settingValue,
   });
 
   final VoiceIntentKind kind;
 
-  /// True when utterance is plausibly about food, ordering, restaurants, or in-app customer data.
   final bool isFoodOrOrderingRelated;
 
-  /// Rough 0–1 score from the rule engine (not ML-calibrated).
   final double confidence;
 
-  /// Free-text snippet for search or follow-up (e.g. dish name, restaurant fragment).
   final String? extractedQuery;
 
   final String? restaurantName;
+
   final String? itemName;
 
-  /// When [kind] == [VoiceIntentKind.categoryBrowse], matches [SdLibRestaurantCategory.id].
+  /// SD-lib restaurant category id when narrowing browse.
   final String? categoryId;
+
+  /// For [toggleSetting] / [updateSettingValue], e.g. notifications, location, username.
+  final String? settingKey;
+
+  final String? settingValue;
+
+  /// Internal: [suggestNextAction] repeats last TTS when set to this value.
+  static const String suggestRepeatLast = '__repeat_last__';
 
   static const VoiceIntentResult empty = VoiceIntentResult(
     kind: VoiceIntentKind.unknown,

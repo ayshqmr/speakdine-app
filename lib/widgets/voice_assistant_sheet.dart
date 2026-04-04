@@ -48,7 +48,7 @@ class VoiceAssistantHelpPanel extends StatelessWidget {
                 material.Icon(material.Icons.mic,
                     size: 20, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
-                const Text('Voice assistant').h4().semiBold(),
+                const Text('SpeakDine voice').h4().semiBold(),
                 const Spacer(),
                 GhostButton(
                   density: ButtonDensity.compact,
@@ -59,9 +59,10 @@ class VoiceAssistantHelpPanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Press and hold the pink microphone button. Speak while holding, then release. '
-              'The app will listen, act on what you said, and read a short reply aloud.\n\n'
-              'Above “Restaurants in …” you will see what you said and what the assistant replied.',
+              'SpeakDine is built for voice-first ordering. Press and hold the microphone, speak, then release. '
+              'The assistant guides you step by step and reads replies aloud. '
+              'Final order confirmation always happens on screen for safety.\n\n'
+              'On the home screen you can read your last line and the assistant reply above the restaurant list.',
               style: TextStyle(
                 color: theme.colorScheme.foreground,
                 fontSize: 14,
