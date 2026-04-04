@@ -27,46 +27,83 @@ class CustomerTransactionsView extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('transactions')
-                .where('customerId', isEqualTo: user?.uid)
-                .orderBy('createdAt', descending: true)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return _buildSkeleton();
-              }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(RadixIcons.cardStack,
-                          size: 48, color: theme.colorScheme.mutedForeground),
-                      const SizedBox(height: 16),
-                      const Text('No transactions yet').semiBold(),
-                      const SizedBox(height: 8),
-                      const Text('Your payments will appear here')
-                          .muted()
-                          .small(),
-                    ],
-                  ),
-                );
-              }
+          child: user == null
+              ? Center(
+                  child: Text('Sign in to see your transactions')
+                      .muted()
+                      .small(),
+                )
+              : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection('transactions')
+                      .where('customerId', isEqualTo: user.uid)
+                      // No orderBy: avoids composite index; sort client-side.
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return _buildSkeleton();
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(RadixIcons.exclamationTriangle,
+                                  size: 40,
+                                  color: theme.colorScheme.destructive),
+                              const SizedBox(height: 12),
+                              const Text('Could not load transactions')
+                                  .semiBold(),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${snapshot.error}',
+                                textAlign: TextAlign.center,
+                              ).muted().small(),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(RadixIcons.cardStack,
+                                size: 48,
+                                color: theme.colorScheme.mutedForeground),
+                            const SizedBox(height: 16),
+                            const Text('No transactions yet').semiBold(),
+                            const SizedBox(height: 8),
+                            const Text('Your payments will appear here')
+                                .muted()
+                                .small(),
+                          ],
+                        ),
+                      );
+                    }
 
-              final docs = snapshot.data!.docs;
-              return ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: docs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final tx = docs[index].data() as Map<String, dynamic>;
-                  return _buildTransactionCard(theme, tx);
-                },
-              );
-            },
-          ),
+                    final docs = snapshot.data!.docs.toList()
+                      ..sort((a, b) {
+                        final ta = a.data()['createdAt'] as Timestamp?;
+                        final tb = b.data()['createdAt'] as Timestamp?;
+                        if (ta == null && tb == null) return 0;
+                        if (ta == null) return 1;
+                        if (tb == null) return -1;
+                        return tb.compareTo(ta);
+                      });
+                    return ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      itemCount: docs.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        return _buildTransactionCard(theme, docs[index].data());
+                      },
+                    );
+                  },
+                ),
         ),
       ],
     );

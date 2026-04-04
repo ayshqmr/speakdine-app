@@ -276,6 +276,7 @@ class _CartViewState extends State<CartView> {
               items: orderItems,
               orderId: customerOrderRef.id,
               connectedAccountId: connectedAccountId,
+              firebaseUid: user.uid,
               platformDebtPaisa: currentDebtPaisa,
             );
 
@@ -294,33 +295,14 @@ class _CartViewState extends State<CartView> {
               return false;
             }
 
-            if (payResult.debtRecoveredPaisa > 0) {
-              await _firestore
-                  .collection('platformDebts')
-                  .doc(restaurantId)
-                  .set({
-                    'amount': FieldValue.increment(-payResult.debtRecoveredPkr),
-                  }, SetOptions(merge: true));
-            }
-
-            await _saveTransaction(
-              customerId: user.uid,
-              customerName: customerName,
-              restaurantId: restaurantId,
-              restaurantName: items.first['restaurantName'] ?? 'Restaurant',
-              orderId: customerOrderRef.id,
-              amount: restaurantTotal,
-              platformFee: payResult.normalFeePkr,
-              restaurantAmount: payResult.restaurantAmountPkr,
-              paymentMethod: 'online',
-              debtRecovered: payResult.debtRecoveredPkr,
-              debtRemaining: currentDebtPkr - payResult.debtRecoveredPkr,
-            );
+            // Debt recovery and `transactions` doc run after payment in
+            // PaymentService.handleStripeCheckoutReturnIfPresent (web).
           } else {
             final sessionId = await PaymentService.openCheckout(
               stripeCustomerId: customerId,
               items: orderItems,
               orderId: customerOrderRef.id,
+              firebaseUid: user.uid,
             );
 
             if (sessionId == null) {
@@ -338,18 +320,8 @@ class _CartViewState extends State<CartView> {
               return false;
             }
 
-            final platformFee = restaurantTotal * 0.05;
-            await _saveTransaction(
-              customerId: user.uid,
-              customerName: customerName,
-              restaurantId: restaurantId,
-              restaurantName: items.first['restaurantName'] ?? 'Restaurant',
-              orderId: customerOrderRef.id,
-              amount: restaurantTotal,
-              platformFee: platformFee,
-              restaurantAmount: restaurantTotal - platformFee,
-              paymentMethod: 'online',
-            );
+            // `transactions` doc is created after successful payment in
+            // PaymentService.handleStripeCheckoutReturnIfPresent (web).
           }
         }
 

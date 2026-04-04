@@ -58,8 +58,11 @@ service cloud.firestore {
 
     match /transactions/{transactionId} {
       allow create: if request.auth != null;
+      // `get` on a missing idempotency doc must not fail: rules cannot use
+      // resource.data until the document exists.
       allow read: if request.auth != null
-        && (request.auth.uid == resource.data.customerId
+        && (!exists(/databases/$(database)/documents/transactions/$(transactionId))
+            || request.auth.uid == resource.data.customerId
             || request.auth.uid == resource.data.restaurantId);
     }
 

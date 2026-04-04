@@ -1,6 +1,7 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:speak_dine/firebase_options.dart';
+import 'package:speak_dine/services/payment_service.dart';
 import 'package:speak_dine/view/splash_screen.dart';
 
 void main() async {
@@ -8,6 +9,7 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await PaymentService.handleStripeCheckoutReturnIfPresent();
   runApp(const SpeakDine());
 }
 
