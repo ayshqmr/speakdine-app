@@ -701,7 +701,8 @@ class _RestaurantProfileViewState extends State<RestaurantProfileView> {
                   onTap: () {
                     Navigator.of(context).push(
                       material.MaterialPageRoute(
-                        builder: (_) => const SettingsView(),
+                        builder: (_) =>
+                            const SettingsView(showVoiceFab: false),
                       ),
                     );
                   },

@@ -400,6 +400,7 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
     final priceHits = [
       RegExp(r'\bhow\s+much\b'),
       RegExp(r'\bprice\b'),
+      RegExp(r'\bprize\b'), // common STT mishear for "price"
       RegExp(r'\bcost\b'),
       RegExp(r'\bpricing\b'),
       RegExp(r'\brate\b'),
@@ -433,8 +434,11 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
       RegExp(r"^what(?:'s|s| is)\s+the\s+(?:price|cost)\s+(?:of|for)\s+(.+)$"),
       RegExp(r'^what(?:\s+is)?\s+(?:the\s+)?(?:price|cost)\s+(?:of|for)\s+(.+)$'),
       RegExp(r"^(?:what(?:'s|s| is)|tell\s+me)\s+(?:the\s+)?price\s+(?:of|for)\s+(.+)$"),
-      RegExp(r'^(.+?)\s+(?:price|cost|pricing)\s*$'),
-      RegExp(r'^(?:price|cost|pricing)\s+(?:of|for)\s+(.+)$'),
+      RegExp(
+        r'^(.+?)\s+(?:price|cost|pricing|prize)\s*(?:please|thanks|thank you)?\s*$',
+      ),
+      RegExp(r'^(?:price|cost|pricing|prize)\s+(?:of|for)\s+(.+)$'),
+      RegExp(r'^(?:price|cost|pricing|prize)\s+for\s+(.+)$'),
       RegExp(
         r'^(?:describe|description|discription|details?)\s+(?:the\s+)?(?:item\s+)?(.+)$',
       ),
@@ -455,7 +459,7 @@ class _RestaurantDetailViewState extends State<RestaurantDetailView> {
     final stripped = lower
         .replaceAll(
           RegExp(
-            r'\b(how\s+much|price|cost|pricing|rate|rs\.?|pkr|rupees?|description|discription|describe|details?|ingredients?|tell\s+me\s+about|info\s+on|whats\s+in)\b',
+            r'\b(how\s+much|price|prize|cost|pricing|rate|rs\.?|pkr|rupees?|description|discription|describe|details?|ingredients?|tell\s+me\s+about|info\s+on|whats\s+in)\b',
           ),
           ' ',
         )

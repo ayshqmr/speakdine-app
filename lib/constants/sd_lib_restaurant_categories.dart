@@ -11,7 +11,7 @@ class SdLibRestaurantCategory {
 const List<SdLibRestaurantCategory> kSdLibRestaurantCategories = [
   SdLibRestaurantCategory(id: 'desi', label: 'Desi'),
   SdLibRestaurantCategory(id: 'fast_food', label: 'Fast Food'),
-  SdLibRestaurantCategory(id: 'cafe', label: 'Café & Coffee'),
+  SdLibRestaurantCategory(id: 'cafe', label: 'Cafe and Coffee'),
   SdLibRestaurantCategory(id: 'bakery', label: 'Bakery & Pastry'),
   SdLibRestaurantCategory(id: 'pizza', label: 'Pizza & Italian'),
   SdLibRestaurantCategory(id: 'asian', label: 'Asian'),

@@ -4,7 +4,10 @@ import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 /// Ported from SD-lib `CustomerSettingsView` (layout preserved, theme-adapted).
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key});
+  const SettingsView({super.key, this.showVoiceFab = true});
+
+  /// Customer voice assistant FAB; off for restaurant settings (no overlap).
+  final bool showVoiceFab;
 
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -115,7 +118,8 @@ class _SettingsViewState extends State<SettingsView> {
               ],
             ),
           ),
-          const CustomerVoiceFabPositioned(hasBottomDock: false),
+          if (widget.showVoiceFab)
+            const CustomerVoiceFabPositioned(hasBottomDock: false),
         ],
       ),
     );

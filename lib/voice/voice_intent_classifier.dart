@@ -28,10 +28,10 @@ class VoiceIntentClassifier {
     hit ??= _ambiguousOrder(lower);
     hit ??= _confirmAdd(lower);
     hit ??= _addToCartVague(lower, raw);
+    hit ??= _cartNaturalLanguage(lower, raw);
     hit ??= _addToCartExplicit(lower, raw);
     hit ??= _selectMenu(lower, raw);
     hit ??= _category(lower);
-    hit ??= _cartNaturalLanguage(lower, raw);
     hit ??= _classifyChangeUserNameAsUpdate(lower, raw);
 
     if (hit != null) {
@@ -333,21 +333,26 @@ class VoiceIntentClassifier {
   }
 
   VoiceIntentResult? _addToCartExplicit(String lower, String raw) {
-    if (!_matches(lower, [
-          'add to cart',
-          'add in cart',
-          'cart mein',
-          'cart me ',
-          'put in cart',
-        ]) &&
-        !(lower.contains('add') && lower.contains('cart'))) {
+    if (_looksLikeCartNaturalLanguageEdit(lower)) {
       return null;
     }
-    final item = _extractItemNameForAddToCart(lower);
+    final item = _extractItemNameFromAddUtterance(lower);
+    if (item == null || item.isEmpty) {
+      return null;
+    }
+    final startsAddOrPut = RegExp(
+      r'^\s*(please\s+)?(add|put)\b',
+    ).hasMatch(lower);
+    final mentionsCart = lower.contains('cart') ||
+        lower.contains('cart mein') ||
+        lower.contains('cart me ');
+    if (!startsAddOrPut && !(lower.contains('add') && mentionsCart)) {
+      return null;
+    }
     return VoiceIntentResult(
       kind: VoiceIntentKind.addToCartRequest,
       isFoodOrOrderingRelated: true,
-      confidence: 0.82,
+      confidence: 0.86,
       itemName: item,
       extractedQuery: raw.trim(),
     );
@@ -395,6 +400,17 @@ class VoiceIntentClassifier {
           extractedQuery: c.label,
         );
       }
+    }
+    // STT / legacy wording (accented café, old "&" label).
+    if (RegExp(r'caf[ée]\s*(?:&|and)\s*coffee').hasMatch(lower)) {
+      final cafe = kSdLibRestaurantCategories.firstWhere((c) => c.id == 'cafe');
+      return VoiceIntentResult(
+        kind: VoiceIntentKind.selectMenuItem,
+        isFoodOrOrderingRelated: true,
+        confidence: 0.74,
+        categoryId: 'cafe',
+        extractedQuery: cafe.label,
+      );
     }
     return null;
   }
@@ -505,20 +521,50 @@ class VoiceIntentClassifier {
     return null;
   }
 
-  String? _extractItemNameForAddToCart(String lower) {
-    var without = lower;
-    for (final p in [
-      'add to cart',
-      'add in cart',
-      'put in cart',
-      'cart mein',
-      'cart me',
-    ]) {
-      without = without.replaceAll(p, ' ');
+  /// When the cloud model mislabels **add [item]** as [selectMenuItem], recover the dish name.
+  String? parseAddToCartItemName(String raw) {
+    final lower = raw.toLowerCase().trim();
+    if (lower.isEmpty || _looksLikeCartNaturalLanguageEdit(lower)) {
+      return null;
     }
-    without = without.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (without.length > 1) {
-      return without;
+    final item = _extractItemNameFromAddUtterance(lower);
+    if (item == null || item.isEmpty) {
+      return null;
+    }
+    final startsAddOrPut = RegExp(
+      r'^\s*(please\s+)?(add|put)\b',
+    ).hasMatch(lower);
+    final mentionsCart = lower.contains('cart') ||
+        lower.contains('cart mein') ||
+        lower.contains('cart me ');
+    if (!startsAddOrPut && !(lower.contains('add') && mentionsCart)) {
+      return null;
+    }
+    return item;
+  }
+
+  /// Strips "add … to cart" / "add …" / "put … in cart" → dish name for menu match.
+  String? _extractItemNameFromAddUtterance(String lower) {
+    var s = lower.trim();
+    s = s.replaceFirst(RegExp(r'^please\s+'), '');
+    final patterns = <RegExp>[
+      RegExp(r'^add\s+(.+?)\s+to\s+my\s+cart\s*$'),
+      RegExp(r'^add\s+(.+?)\s+to\s+cart\s*$'),
+      RegExp(r'^add\s+(.+?)\s+in\s+cart\s*$'),
+      RegExp(r'^put\s+(.+?)\s+in\s+cart\s*$'),
+      RegExp(r'^add\s+(.+?)\s+into\s+cart\s*$'),
+      RegExp(r'^add\s+(.+)$'),
+    ];
+    for (final re in patterns) {
+      final m = re.firstMatch(s);
+      if (m != null && m.groupCount >= 1) {
+        var item = (m.group(1) ?? '').trim();
+        item = item.replaceAll(RegExp(r'\s+please\s*$'), '').trim();
+        item = item.replaceAll(RegExp(r'^(?:the|a|an)\s+'), '').trim();
+        if (item.length >= 2) {
+          return item;
+        }
+      }
     }
     return null;
   }

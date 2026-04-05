@@ -2,6 +2,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/voice/customer_voice_bridge.dart';
+import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 class _AlreadyReviewedException implements Exception {}
 
@@ -13,7 +14,8 @@ void showReviewDialog(
   required String customerId,
   required String customerName,
 }) {
-  int selectedRating = 0;
+  /// -1 = not chosen yet; 0–5 = voice or taps (0 = no stars filled).
+  int selectedRating = -1;
   final commentController = TextEditingController();
   bool submitting = false;
   bool isDialogActive = true;
@@ -41,8 +43,8 @@ void showReviewDialog(
         }
 
         Future<String?> submitFromVoice() async {
-          if (selectedRating < 1) {
-            return 'Please say a star rating from one to five first.';
+          if (selectedRating < 0) {
+            return 'Please say how many stars, from zero to five.';
           }
           if (submitting) {
             return 'Your review is already being submitted.';
@@ -149,7 +151,7 @@ void showReviewDialog(
 
         bridge.isVoiceReviewDialogOpen = () => isDialogActive;
         bridge.setVoiceReviewStars = (stars) {
-          final clamped = stars.clamp(1, 5);
+          final clamped = stars.clamp(0, 5);
           setDialogState(() => selectedRating = clamped);
         };
         bridge.setVoiceReviewComment = (comment) {
@@ -166,83 +168,103 @@ void showReviewDialog(
         };
 
         final theme = Theme.of(ctx);
-        return PopScope(
-          onPopInvokedWithResult: (_, __) {
-            clearVoiceHooks();
-            disposeCommentController();
-          },
-          child: AlertDialog(
-            title: const Text('Rate your experience'),
-            content: SingleChildScrollView(
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.viewInsetsOf(ctx).bottom,
-              ),
-              child: SizedBox(
-                width: 340,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(restaurantName).semiBold(),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(5, (index) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: GestureDetector(
-                            onTap: () {
-                              setDialogState(() => selectedRating = index + 1);
-                            },
-                            child: Icon(
-                              RadixIcons.star,
-                              color: index < selectedRating
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.mutedForeground,
-                              size: 32,
+        return SizedBox.expand(
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Center(
+                child: PopScope(
+                  onPopInvokedWithResult: (_, __) {
+                    clearVoiceHooks();
+                    disposeCommentController();
+                  },
+                  child: AlertDialog(
+                    title: const Text('Rate your experience'),
+                    content: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: EdgeInsets.only(
+                        bottom: MediaQuery.viewInsetsOf(ctx).bottom,
+                      ),
+                      child: SizedBox(
+                        width: 340,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(restaurantName).semiBold(),
+                            const SizedBox(height: 20),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(5, (index) {
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      setDialogState(
+                                        () => selectedRating = index + 1,
+                                      );
+                                    },
+                                    child: Icon(
+                                      RadixIcons.star,
+                                      color: selectedRating > 0 &&
+                                              index < selectedRating
+                                          ? theme.colorScheme.primary
+                                          : theme.colorScheme.mutedForeground,
+                                      size: 32,
+                                    ),
+                                  ),
+                                );
+                              }),
                             ),
-                          ),
-                        );
-                      }),
+                            const SizedBox(height: 20),
+                            const Text('Comment (optional)')
+                                .semiBold()
+                                .small(),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: commentController,
+                              placeholder: const Text(
+                                'Share your experience... Hold the mic to speak.',
+                              ),
+                              maxLines: 3,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    const Text('Comment (optional)').semiBold().small(),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: commentController,
-                      placeholder: const Text('Share your experience...'),
-                      maxLines: 3,
-                    ),
-                  ],
+                    actions: [
+                      OutlineButton(
+                        onPressed: submitting
+                            ? null
+                            : () {
+                                clearVoiceHooks();
+                                Navigator.pop(ctx);
+                                disposeCommentController();
+                              },
+                        child: const Text('Cancel'),
+                      ),
+                      PrimaryButton(
+                        onPressed: submitting
+                            ? null
+                            : () async {
+                                if (selectedRating < 0) {
+                                  showAppToast(ctx, 'Please select a rating');
+                                  return;
+                                }
+                                await submitFromVoice();
+                              },
+                        child: submitting
+                            ? const Text('Submitting...')
+                            : const Text('Submit'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            actions: [
-              OutlineButton(
-                onPressed: submitting
-                    ? null
-                    : () {
-                        clearVoiceHooks();
-                        Navigator.pop(ctx);
-                        disposeCommentController();
-                      },
-                child: const Text('Cancel'),
-              ),
-              PrimaryButton(
-                onPressed: submitting
-                    ? null
-                    : () async {
-                        if (selectedRating < 1) {
-                          showAppToast(ctx, 'Please select a rating');
-                          return;
-                        }
-                        await submitFromVoice();
-                      },
-                child: submitting
-                    ? const Text('Submitting...')
-                    : const Text('Submit'),
-              ),
+              const CustomerVoiceFabPositioned(hasBottomDock: true),
             ],
           ),
         );

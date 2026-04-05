@@ -6,6 +6,7 @@ import 'package:speak_dine/view/common/settings_view.dart';
 import 'package:speak_dine/voice/cart_natural_language.dart';
 import 'package:speak_dine/voice/customer_voice_bridge.dart';
 import 'package:speak_dine/voice/explore_restaurant_voice.dart';
+import 'package:speak_dine/voice/voice_intent_classifier.dart';
 import 'package:speak_dine/voice/voice_intent_models.dart';
 
 /// Obvious tab / tracking phrases handled before restaurant-name resolution or cloud intent.
@@ -22,6 +23,8 @@ enum VoiceTabShortcut {
 
 /// Executes navigation + TTS from a [VoiceIntentResult].
 class VoiceIntentRouter {
+  static const VoiceIntentClassifier _addItemClassifier = VoiceIntentClassifier();
+
   /// When [speakAloud] is false, navigation still runs but the router does not call TTS
   /// (e.g. SpeakTime conversational model already produced the spoken script).
   VoiceIntentRouter({
@@ -341,6 +344,13 @@ class VoiceIntentRouter {
   }) async {
     await _tts.stop();
     final bridge = CustomerVoiceBridge.instance;
+    final utterTrim = (userUtterance ?? '').trim();
+    if (utterTrim.isNotEmpty && bridge.confirmVoiceAddToCartFromMenu != null) {
+      final factLine = bridge.answerMenuItemVoiceFact?.call(utterTrim);
+      if (factLine != null && factLine.trim().isNotEmpty) {
+        return _speak(factLine.trim());
+      }
+    }
     final allowSearch = explicitSearchRequested(userUtterance);
 
     switch (r.kind) {
@@ -482,10 +492,27 @@ class VoiceIntentRouter {
           );
           return _speak(line);
         }
-        final dish = (r.itemName ?? r.extractedQuery ?? '').trim();
+        var dish = (r.itemName ?? r.extractedQuery ?? '').trim();
+        final addParsed = utterTrim.isNotEmpty
+            ? _addItemClassifier.parseAddToCartItemName(utterTrim)
+            : null;
+        if (addParsed != null && addParsed.isNotEmpty) {
+          dish = addParsed;
+        }
         if (dish.isNotEmpty) {
           bridge.pendingVoiceCartItem = dish;
           if (bridge.confirmVoiceAddToCartFromMenu != null) {
+            if (addParsed != null) {
+              final confirm = bridge.confirmVoiceAddToCartFromMenu!;
+              final err = await confirm();
+              if (err == null) {
+                _notifyCart();
+                return _speak(
+                  '$dish has been added to your cart. Would you like to add something else?',
+                );
+              }
+              return _speak(err);
+            }
             return _speak(
               'Okay, $dish on this menu. Say confirm add to add it.',
             );
