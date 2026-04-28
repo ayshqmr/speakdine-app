@@ -13,10 +13,7 @@ import 'package:speak_dine/voice/speaktime_assistant_system_prompt.dart';
 import 'package:speak_dine/voice/voice_intent_classifier.dart';
 import 'package:speak_dine/voice/voice_intent_models.dart';
 import 'package:speak_dine/voice/voice_intent_router.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:speak_dine/view/user/review_dialog.dart';
 
 enum _VoiceReviewStage {
   idle,
@@ -50,6 +47,7 @@ class VoiceAssistantSession {
   bool _initialized = false;
   bool _holding = false;
   String _latestText = '';
+  String _latestFinalText = '';
   _VoiceReviewStage _reviewStage = _VoiceReviewStage.idle;
   bool _restaurantBrowseActive = false;
   int _restaurantBrowseOffset = 0;
@@ -136,6 +134,7 @@ class VoiceAssistantSession {
     bridge.voiceListening.value = true;
     bridge.assistantSpeechLine.value = '';
     _latestText = '';
+    _latestFinalText = '';
     bridge.userSpeechLine.value = '';
 
     await _stt.cancelListening();
@@ -146,6 +145,9 @@ class VoiceAssistantSession {
       pauseFor: const Duration(seconds: 10),
       onResultText: (text, isFinal) {
         _latestText = text;
+        if (isFinal && text.trim().isNotEmpty) {
+          _latestFinalText = text.trim();
+        }
         bridge.userSpeechLine.value = text;
         debugPrint(
           '[VoiceSTT] ${isFinal ? "final" : "partial"}: ${text.trim()}',
@@ -167,7 +169,11 @@ class VoiceAssistantSession {
 
     await _stt.stopListening();
 
-    final text = _latestText.trim();
+    var text = _latestText.trim();
+    if (text.isEmpty && _latestFinalText.isNotEmpty) {
+      text = _latestFinalText.trim();
+      debugPrint('[VoiceSTT] using latest final fallback text="$text"');
+    }
     debugPrint('[VoiceSTT] hold-end text="$text"');
     bridge.userSpeechLine.value = text;
     if (text.isEmpty) {
@@ -182,6 +188,16 @@ class VoiceAssistantSession {
       await _tts.stop();
       await _tts.speak(reviewHandled);
       _applyAssistantSpeechLine(reviewHandled);
+      return;
+    }
+
+    final priorityCartIntentHandled = await _handlePriorityCartCustomizationIntent(
+      text,
+    );
+    if (priorityCartIntentHandled != null) {
+      await _tts.stop();
+      await _tts.speak(priorityCartIntentHandled);
+      _applyAssistantSpeechLine(priorityCartIntentHandled);
       return;
     }
 
@@ -285,16 +301,7 @@ class VoiceAssistantSession {
       var spoken = turn.speech;
       _router.speakAloud = false;
       try {
-        // Menu price/description: authoritative match from loaded menu docs must win
-        // over LLM speech or intents like addToCartRequest ("burger price").
-        String? menuFact;
-        if (text.trim().isNotEmpty &&
-            bridge.confirmVoiceAddToCartFromMenu != null) {
-          menuFact = bridge.answerMenuItemVoiceFact?.call(text);
-        }
-        if (menuFact != null && menuFact.trim().isNotEmpty) {
-          spoken = menuFact.trim();
-        } else if (turn.intent != null) {
+        if (turn.intent != null) {
           final routerLine = await _router.handle(
             turn.intent!,
             userUtterance: text,
@@ -329,6 +336,32 @@ class VoiceAssistantSession {
     return cloud ?? rule;
   }
 
+  Future<String?> _handlePriorityCartCustomizationIntent(String text) async {
+    final lower = text.toLowerCase();
+    final likelyCustomization = lower.contains('customize') ||
+        lower.contains('customise') ||
+        lower.contains('customization') ||
+        lower.contains('customisation');
+    final awaitingCustomization = CustomerVoiceBridge
+            .instance
+            .voiceAwaitingCustomizationText ||
+        CustomerVoiceBridge.instance.voiceAwaitingCustomizeYesNo ||
+        CustomerVoiceBridge.instance.voiceAwaitingRemoveCustomizationItem;
+    if (!likelyCustomization && !awaitingCustomization) {
+      return null;
+    }
+    final intent = _classifier.classify(text);
+    switch (intent.kind) {
+      case VoiceIntentKind.customizeCartItem:
+      case VoiceIntentKind.provideCustomizationNote:
+      case VoiceIntentKind.removeCartItemCustomization:
+      case VoiceIntentKind.listCartItemsIntent:
+        return _router.handle(intent, userUtterance: text);
+      default:
+        return null;
+    }
+  }
+
   Future<String?> _handleReviewVoiceFlow(String text) async {
     final bridge = CustomerVoiceBridge.instance;
     final lower = text.toLowerCase();
@@ -339,17 +372,22 @@ class VoiceAssistantSession {
     bool isNo() => hasWord(['no', 'nope', 'nah', 'skip', 'nahi']);
 
     if (_reviewStage == _VoiceReviewStage.idle) {
-      final wantsReview = _utteranceWantsRateAndReviewFlow(lower);
+      final wantsReview =
+          hasWord(['review', 'rate', 'rating', 'feedback']) &&
+          (isYes() || hasWord(['add', 'leave', 'write', 'open', 'submit']));
       if (!wantsReview) {
         return null;
       }
-      final err = await _openPendingReviewDialogForVoice(bridge);
+      final opener = bridge.openPendingReviewDialog;
+      if (opener == null) {
+        return 'Please open My Orders and choose Rate and Review first.';
+      }
+      final err = await opener();
       if (err != null) {
         return err;
       }
       _reviewStage = _VoiceReviewStage.askStars;
-      return 'Opening rate and review for your latest delivered order. '
-          'How many stars would you like to give, from zero to five?';
+      return 'Review opened. How many stars would you like to give, from one to five?';
     }
 
     final isDialogOpen = bridge.isVoiceReviewDialogOpen?.call() == true;
@@ -362,7 +400,7 @@ class VoiceAssistantSession {
       case _VoiceReviewStage.askStars:
         final stars = _extractStarValue(lower);
         if (stars == null) {
-          return 'Please say a number from zero to five stars.';
+          return 'Please say a number from one star to five stars.';
         }
         bridge.setVoiceReviewStars?.call(stars);
         _reviewStage = _VoiceReviewStage.askCommentConsent;
@@ -374,14 +412,10 @@ class VoiceAssistantSession {
           return 'Please say your comment now.';
         }
         if (isNo()) {
-          final err = await bridge.submitVoiceReview?.call();
-          if (err != null) {
-            return '$err You can say yes to add a comment, or try again.';
-          }
-          _reviewStage = _VoiceReviewStage.idle;
-          return 'Your review has been submitted. Thank you for your feedback.';
+          _reviewStage = _VoiceReviewStage.askSubmitOrCancel;
+          return 'No comment added. Would you like to submit or cancel this review?';
         }
-        return 'Please say yes to add a comment, or no to submit without a comment.';
+        return 'Please say yes to add a comment, or no to skip it.';
 
       case _VoiceReviewStage.captureComment:
         final comment = text.trim();
@@ -393,18 +427,11 @@ class VoiceAssistantSession {
         return 'Comment added. Would you like to submit or cancel this review?';
 
       case _VoiceReviewStage.askSubmitOrCancel:
-        if (hasWord([
-          'submit',
-          'post',
-          'send',
-          'done',
-          'confirm',
-          'select',
-        ])) {
+        if (hasWord(['submit', 'post', 'send', 'done', 'confirm'])) {
           final err = await bridge.submitVoiceReview?.call();
           _reviewStage = _VoiceReviewStage.idle;
           if (err != null) {
-            return '$err Say submit or select to try again, or cancel.';
+            return '$err Say submit to try again, or cancel.';
           }
           return 'Your review has been submitted. Thank you for your feedback.';
         }
@@ -413,90 +440,11 @@ class VoiceAssistantSession {
           _reviewStage = _VoiceReviewStage.idle;
           return 'Review cancelled.';
         }
-        return 'Please say submit or select to post your review, or cancel to close it.';
+        return 'Please say submit to post your review, or cancel to close it.';
 
       case _VoiceReviewStage.idle:
         return null;
     }
-  }
-
-  bool _utteranceWantsRateAndReviewFlow(String lower) {
-    bool has(String w) => lower.contains(w);
-    if (has('rate and review') ||
-        has('rate & review') ||
-        has('rate n review')) {
-      return true;
-    }
-    if (has('leave a review') ||
-        has('write a review') ||
-        has('give a review') ||
-        has('submit a review')) {
-      return true;
-    }
-    if ((has('review') ||
-            has('rate') ||
-            has('rating') ||
-            has('feedback')) &&
-        (has('yes') ||
-            has('yeah') ||
-            has('yep') ||
-            has('sure') ||
-            has('okay') ||
-            has('ok') ||
-            has('haan') ||
-            has('add') ||
-            has('leave') ||
-            has('write') ||
-            has('open') ||
-            has('submit'))) {
-      return true;
-    }
-    return false;
-  }
-
-  Future<String?> _openPendingReviewDialogForVoice(CustomerVoiceBridge bridge) async {
-    final registered = bridge.openPendingReviewDialog;
-    if (registered != null) {
-      return registered();
-    }
-    final ctx = bridge.shellContext;
-    final user = FirebaseAuth.instance.currentUser;
-    if (ctx == null || !ctx.mounted || user == null) {
-      return 'Please sign in, then open the Orders tab and try again.';
-    }
-    try {
-      final qs = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .collection('orders')
-          .orderBy('createdAt', descending: true)
-          .limit(40)
-          .get();
-      for (final doc in qs.docs) {
-        final data = doc.data();
-        final status = (data['status'] as String? ?? '').trim();
-        if (status != 'delivered') continue;
-        if (data['reviewed'] == true) continue;
-        final rid = (data['restaurantId'] as String?)?.trim() ?? '';
-        if (rid.isEmpty) continue;
-        if (!ctx.mounted) return 'Try again in a moment.';
-        showReviewDialog(
-          ctx,
-          restaurantId: rid,
-          restaurantName:
-              (data['restaurantName'] as String?)?.trim() ?? 'Restaurant',
-          orderId: doc.id,
-          customerId: user.uid,
-          customerName:
-              (data['customerName'] as String?)?.trim() ?? 'Customer',
-        );
-        return null;
-      }
-    } catch (e, st) {
-      debugPrint('[VoiceReview] open dialog: $e\n$st');
-      return 'Could not load orders. Open the Orders tab and try again.';
-    }
-    return 'You do not have any delivered order pending review.';
   }
 
   int? _extractStarValue(String lower) {
@@ -530,12 +478,6 @@ class VoiceAssistantSession {
         lower.contains('1 star')) {
       return 1;
     }
-    if (RegExp(r'\b0\b').hasMatch(lower) ||
-        lower.contains('zero') ||
-        lower.contains('zero star') ||
-        lower.contains('0 star')) {
-      return 0;
-    }
     return null;
   }
 
@@ -555,6 +497,10 @@ class VoiceAssistantSession {
         l.contains('place your order') && l.contains('make changes');
     b.voiceAwaitingEmptyCartBrowsePrompt =
         l.contains('cart is empty') && l.contains('browse restaurants');
+    b.voiceAwaitingCustomizeYesNo =
+        l.contains('added to your cart') &&
+        (l.contains('customize this item') ||
+            l.contains('customise this item'));
   }
 
   void _applyAssistantSpeechLine(String spoken) {
@@ -653,6 +599,66 @@ class VoiceAssistantSession {
         _isAffirmativeHearReviews(lower) && _isAffirmationOnlyUtterance(text);
     final declineOnly =
         _isDeclineHearReviews(lower) && _isDeclineOnlyUtterance(text);
+
+    if (bridge.voiceAwaitingCustomizeYesNo) {
+      if (affirmOnly) {
+        bridge.voiceAwaitingCustomizeYesNo = false;
+        bridge.voiceAwaitingCustomizationText = true;
+        final item = (bridge.pendingVoiceCustomizationItem ?? 'this item').trim();
+        return 'Sure. Tell me your customisation for $item.';
+      }
+      if (declineOnly) {
+        bridge.voiceAwaitingCustomizeYesNo = false;
+        bridge.voiceAwaitingCustomizationText = false;
+        bridge.pendingVoiceCustomizationItem = null;
+        return 'Okay, no customisation added. Would you like anything else?';
+      }
+    }
+    if (bridge.voiceAwaitingCustomizationText) {
+      final note = text.trim();
+      final item = (bridge.pendingVoiceCustomizationItem ?? '').trim();
+      if (item.isEmpty) {
+        bridge.voiceAwaitingCustomizationText = false;
+        return 'Please say customise followed by an item name first.';
+      }
+      if (note.isEmpty ||
+          _isAffirmativeHearReviews(lower) ||
+          _isDeclineHearReviews(lower)) {
+        return 'Please tell me the customisation details for $item.';
+      }
+      final updated = cartService.setNoteForMatchingItems(item, note);
+      if (updated == 0) {
+        return 'I could not find $item in your cart. Please try another item name.';
+      }
+      bridge.notifyCartChanged?.call();
+      bridge.voiceAwaitingCustomizationText = false;
+      bridge.voiceAwaitingCustomizeYesNo = false;
+      bridge.pendingVoiceCustomizationItem = null;
+      return 'I have updated your cart. Would you like anything else?';
+    }
+    if (bridge.voiceAwaitingRemoveCustomizationItem) {
+      final item = text.trim();
+      if (item.isEmpty ||
+          _isAffirmativeHearReviews(lower) ||
+          _isDeclineHearReviews(lower)) {
+        final names = cartService.cartItemNames();
+        if (names.isEmpty) {
+          bridge.voiceAwaitingRemoveCustomizationItem = false;
+          return 'Your cart is empty.';
+        }
+        return 'Please say the item name. Your cart items are: ${names.join(', ')}';
+      }
+      final updated = cartService.clearNoteForMatchingItems(item);
+      if (updated == 0) {
+        final names = cartService.cartItemNames();
+        return names.isEmpty
+            ? 'Your cart is empty.'
+            : 'I could not match that item. Your cart has: ${names.join(', ')}';
+      }
+      bridge.notifyCartChanged?.call();
+      bridge.voiceAwaitingRemoveCustomizationItem = false;
+      return 'Customisation removed for $item. Would you like anything else?';
+    }
 
     if (bridge.voiceAwaitingEmptyCartBrowsePrompt) {
       if (affirmOnly) {
@@ -1398,6 +1404,10 @@ class VoiceAssistantSession {
     bridge.voiceAwaitingCartAddMorePrompt = false;
     bridge.voiceAwaitingCartOrderOrChangesPrompt = false;
     bridge.voiceAwaitingEmptyCartBrowsePrompt = false;
+    bridge.voiceAwaitingCustomizeYesNo = false;
+    bridge.voiceAwaitingCustomizationText = false;
+    bridge.pendingVoiceCustomizationItem = null;
+    bridge.voiceAwaitingRemoveCustomizationItem = false;
     _restaurantBrowseActive = false;
     _restaurantBrowseOffset = 0;
     _restaurantBrowseCategoryId = null;

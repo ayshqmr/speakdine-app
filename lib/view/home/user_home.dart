@@ -152,8 +152,8 @@ class _UserHomeViewState extends State<UserHomeView> {
     if (!mounted) return;
     setState(() {
       _exploreFilters = SdLibRestaurantExploreFilters(
-        categoryId: categoryId,
-        openNowOnly: true,
+        categoryId: sdLibNormalizeExploreCategoryId(categoryId),
+        openNowOnly: _exploreFilters.openNowOnly,
       );
     });
   }
@@ -576,7 +576,7 @@ class _UserHomeViewState extends State<UserHomeView> {
     if (!restaurantMatchesExploreSearch(data, searchQuery)) {
       return false;
     }
-    final catFilter = _exploreFilters.categoryId;
+    final catFilter = _exploreFilters.effectiveCategoryId;
     if (catFilter != null) {
       final cat = data['restaurantCategory'] as String?;
       if (cat != catFilter) return false;

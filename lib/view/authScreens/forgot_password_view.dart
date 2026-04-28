@@ -156,7 +156,7 @@ class _ForgotPasswordViewState extends State<ForgotPasswordView> {
                         AuthLabeledTextField(
                           label: 'Email',
                           controller: _identifierController,
-                          placeholder: 'you@example.com',
+                          placeholder: 'you@google.com',
                         ),
                         const SizedBox(height: 8),
                         PrimaryButton(

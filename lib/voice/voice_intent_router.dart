@@ -6,7 +6,6 @@ import 'package:speak_dine/view/common/settings_view.dart';
 import 'package:speak_dine/voice/cart_natural_language.dart';
 import 'package:speak_dine/voice/customer_voice_bridge.dart';
 import 'package:speak_dine/voice/explore_restaurant_voice.dart';
-import 'package:speak_dine/voice/voice_intent_classifier.dart';
 import 'package:speak_dine/voice/voice_intent_models.dart';
 
 /// Obvious tab / tracking phrases handled before restaurant-name resolution or cloud intent.
@@ -23,8 +22,6 @@ enum VoiceTabShortcut {
 
 /// Executes navigation + TTS from a [VoiceIntentResult].
 class VoiceIntentRouter {
-  static const VoiceIntentClassifier _addItemClassifier = VoiceIntentClassifier();
-
   /// When [speakAloud] is false, navigation still runs but the router does not call TTS
   /// (e.g. SpeakTime conversational model already produced the spoken script).
   VoiceIntentRouter({
@@ -188,6 +185,10 @@ class VoiceIntentRouter {
 
   void _clearVoiceFlow(CustomerVoiceBridge b) {
     b.clearPendingVoiceCartItem();
+    b.voiceAwaitingCustomizeYesNo = false;
+    b.voiceAwaitingCustomizationText = false;
+    b.pendingVoiceCustomizationItem = null;
+    b.voiceAwaitingRemoveCustomizationItem = false;
   }
 
   /// Tab navigation only; returns the line the assistant should speak (caller may TTS).
@@ -255,6 +256,14 @@ class VoiceIntentRouter {
       return '';
     }
     return parts.join(', ');
+  }
+
+  String _cartItemNamesForTts() {
+    final names = cartService.cartItemNames();
+    if (names.isEmpty) {
+      return 'Your cart is empty.';
+    }
+    return names.join(', ');
   }
 
   /// True only when the user starts with an explicit home-explore command (after
@@ -344,13 +353,6 @@ class VoiceIntentRouter {
   }) async {
     await _tts.stop();
     final bridge = CustomerVoiceBridge.instance;
-    final utterTrim = (userUtterance ?? '').trim();
-    if (utterTrim.isNotEmpty && bridge.confirmVoiceAddToCartFromMenu != null) {
-      final factLine = bridge.answerMenuItemVoiceFact?.call(utterTrim);
-      if (factLine != null && factLine.trim().isNotEmpty) {
-        return _speak(factLine.trim());
-      }
-    }
     final allowSearch = explicitSearchRequested(userUtterance);
 
     switch (r.kind) {
@@ -362,26 +364,26 @@ class VoiceIntentRouter {
 
       case VoiceIntentKind.unknown:
         final utter = (userUtterance ?? '').trim();
+        final onRestaurantMenu = bridge.confirmVoiceAddToCartFromMenu != null;
         var q = (r.extractedQuery ?? r.itemName ?? '').trim();
         if (q.isEmpty && allowSearch && userUtterance != null) {
           q = userUtterance.trim();
         }
-        final onMenu = bridge.confirmVoiceAddToCartFromMenu != null;
         var navKind = utter.isNotEmpty
-            ? classifyVoiceTabShortcut(utter, onRestaurantMenu: onMenu)
+            ? classifyVoiceTabShortcut(utter, onRestaurantMenu: onRestaurantMenu)
             : VoiceTabShortcut.none;
         if (navKind == VoiceTabShortcut.none && q.isNotEmpty) {
-          navKind = classifyVoiceTabShortcut(q, onRestaurantMenu: onMenu);
+          navKind = classifyVoiceTabShortcut(q, onRestaurantMenu: onRestaurantMenu);
         }
         if (navKind != VoiceTabShortcut.none) {
           return _handleVoiceTabShortcut(navKind);
         }
-        if (allowSearch) {
+        if (allowSearch && !onRestaurantMenu) {
           switchToTab(tabHome);
         }
         final searchBar =
-            allowSearch ? normalizeExploreSearchQuery(q) : null;
-        if (searchBar != null && allowSearch) {
+            (allowSearch && !onRestaurantMenu) ? normalizeExploreSearchQuery(q) : null;
+        if (searchBar != null && allowSearch && !onRestaurantMenu) {
           bridge.applySearchQuery?.call(searchBar);
         }
         final qLower = q.toLowerCase();
@@ -395,6 +397,11 @@ class VoiceIntentRouter {
           );
         }
         if (r.isFoodOrOrderingRelated) {
+          if (onRestaurantMenu) {
+            return _speak(
+              'I did not catch that menu action. You can say menu items, a dish name, confirm add, or go back.',
+            );
+          }
           return _speak(
             allowSearch
                 ? 'Searching for that. Say add to cart with a dish name, open cart, or go home.'
@@ -425,8 +432,16 @@ class VoiceIntentRouter {
           final err = await confirm!();
           if (err == null) {
             _notifyCart();
+            bridge.pendingVoiceCustomizationItem = item;
+            bridge.voiceAwaitingCustomizeYesNo = true;
+            bridge.voiceAwaitingCustomizationText = false;
+            bridge.voiceAwaitingRestaurantReviewsYesNo = false;
+            bridge.voiceAwaitingBrowseCuisineHint = false;
+            bridge.voiceAwaitingCartAddMorePrompt = false;
+            bridge.voiceAwaitingCartOrderOrChangesPrompt = false;
+            bridge.voiceAwaitingEmptyCartBrowsePrompt = false;
             return _speak(
-              '$item has been added to your cart. Would you like to add something else?',
+              '$item has been added to your cart. Would you like to customise this item?',
             );
           }
           return _speak(err);
@@ -492,27 +507,10 @@ class VoiceIntentRouter {
           );
           return _speak(line);
         }
-        var dish = (r.itemName ?? r.extractedQuery ?? '').trim();
-        final addParsed = utterTrim.isNotEmpty
-            ? _addItemClassifier.parseAddToCartItemName(utterTrim)
-            : null;
-        if (addParsed != null && addParsed.isNotEmpty) {
-          dish = addParsed;
-        }
+        final dish = (r.itemName ?? r.extractedQuery ?? '').trim();
         if (dish.isNotEmpty) {
           bridge.pendingVoiceCartItem = dish;
           if (bridge.confirmVoiceAddToCartFromMenu != null) {
-            if (addParsed != null) {
-              final confirm = bridge.confirmVoiceAddToCartFromMenu!;
-              final err = await confirm();
-              if (err == null) {
-                _notifyCart();
-                return _speak(
-                  '$dish has been added to your cart. Would you like to add something else?',
-                );
-              }
-              return _speak(err);
-            }
             return _speak(
               'Okay, $dish on this menu. Say confirm add to add it.',
             );
@@ -546,9 +544,17 @@ class VoiceIntentRouter {
         }
         _notifyCart();
         final label = (bridge.pendingVoiceCartItem ?? '').trim();
+        bridge.pendingVoiceCustomizationItem = label.isNotEmpty ? label : null;
+        bridge.voiceAwaitingCustomizeYesNo = true;
+        bridge.voiceAwaitingCustomizationText = false;
+        bridge.voiceAwaitingRestaurantReviewsYesNo = false;
+        bridge.voiceAwaitingBrowseCuisineHint = false;
+        bridge.voiceAwaitingCartAddMorePrompt = false;
+        bridge.voiceAwaitingCartOrderOrChangesPrompt = false;
+        bridge.voiceAwaitingEmptyCartBrowsePrompt = false;
         final line = label.isNotEmpty
-            ? '$label has been added to your cart. Would you like to add something else?'
-            : 'Your item has been added to your cart. Would you like to add something else?';
+            ? '$label has been added to your cart. Would you like to customise this item?'
+            : 'Your item has been added to your cart. Would you like to customise this item?';
         return _speak(line);
 
       case VoiceIntentKind.addToCartIntent:
@@ -559,9 +565,19 @@ class VoiceIntentRouter {
             if (err == null) {
               _notifyCart();
               final label = (bridge.pendingVoiceCartItem ?? '').trim();
+              bridge.pendingVoiceCustomizationItem = label.isNotEmpty
+                  ? label
+                  : null;
+              bridge.voiceAwaitingCustomizeYesNo = true;
+              bridge.voiceAwaitingCustomizationText = false;
+              bridge.voiceAwaitingRestaurantReviewsYesNo = false;
+              bridge.voiceAwaitingBrowseCuisineHint = false;
+              bridge.voiceAwaitingCartAddMorePrompt = false;
+              bridge.voiceAwaitingCartOrderOrChangesPrompt = false;
+              bridge.voiceAwaitingEmptyCartBrowsePrompt = false;
               final line = label.isNotEmpty
-                  ? '$label has been added to your cart. Would you like to add something else?'
-                  : 'Your item has been added to your cart. Would you like to add something else?';
+                  ? '$label has been added to your cart. Would you like to customise this item?'
+                  : 'Your item has been added to your cart. Would you like to customise this item?';
               return _speak(line);
             }
             return _speak(err);
@@ -602,6 +618,93 @@ class VoiceIntentRouter {
         final line = CartNaturalLanguage.applyFromUtterance(phrase);
         _notifyCart();
         return _speak(line);
+
+      case VoiceIntentKind.customizeCartItem:
+        final item = (r.itemName ?? r.extractedQuery ?? '').trim();
+        if (item.isEmpty) {
+          return _speak(
+            'Please say which cart item to customise, for example customise burger.',
+          );
+        }
+        if (!cartService.hasMatchingItem(item)) {
+          return _speak(
+            'I could not find $item in your cart. Please say an item that is already in your cart.',
+          );
+        }
+        bridge.pendingVoiceCustomizationItem = item;
+        bridge.voiceAwaitingCustomizeYesNo = false;
+        bridge.voiceAwaitingCustomizationText = true;
+        bridge.voiceAwaitingRestaurantReviewsYesNo = false;
+        final existing = cartService.firstNoteForMatchingItem(item);
+        if (existing != null && existing.isNotEmpty) {
+          return _speak(
+            'Current customisation for $item is: $existing. '
+            'Tell me what to write in the customisation note.',
+          );
+        }
+        return _speak('What customisation would you like for $item?');
+
+      case VoiceIntentKind.provideCustomizationNote:
+        var item = (bridge.pendingVoiceCustomizationItem ?? '').trim();
+        var note = (r.extractedQuery ?? '').trim();
+        if (item.isEmpty) {
+          final matched = cartService.firstMatchingItemNameInText(note);
+          if (matched != null && matched.isNotEmpty) {
+            item = matched;
+            note = note.replaceFirst(RegExp(RegExp.escape(matched), caseSensitive: false), '').trim();
+            note = note
+                .replaceFirst(RegExp(r'^(for|of)\s+', caseSensitive: false), '')
+                .trim();
+          }
+        }
+        if (item.isEmpty) {
+          return _speak(
+            'Please say customise followed by the item name first, for example customise burger.',
+          );
+        }
+        if (note.isEmpty) {
+          bridge.voiceAwaitingCustomizationText = true;
+          bridge.pendingVoiceCustomizationItem = item;
+          return _speak('Please tell me the customisation note for $item.');
+        }
+        final updated = cartService.setNoteForMatchingItems(item, note);
+        if (updated == 0) {
+          return _speak(
+            'I could not find $item in your cart. Please open cart and try again.',
+          );
+        }
+        _notifyCart();
+        bridge.voiceAwaitingCustomizationText = false;
+        bridge.voiceAwaitingCustomizeYesNo = false;
+        return _speak('Customisation saved for $item. Would you like anything else?');
+
+      case VoiceIntentKind.removeCartItemCustomization:
+        final item = (r.itemName ?? '').trim();
+        if (item.isEmpty) {
+          bridge.voiceAwaitingRemoveCustomizationItem = true;
+          final names = _cartItemNamesForTts();
+          return _speak(
+            'For which cart item should I remove customisation? '
+            'Your cart items are: $names',
+          );
+        }
+        final updated = cartService.clearNoteForMatchingItems(item);
+        if (updated == 0) {
+          return _speak(
+            'I could not find $item in your cart. Please try another item name.',
+          );
+        }
+        _notifyCart();
+        bridge.voiceAwaitingRemoveCustomizationItem = false;
+        return _speak('Customisation removed for $item. Would you like anything else?');
+
+      case VoiceIntentKind.listCartItemsIntent:
+        switchToTab(tabCart);
+        final names = _cartItemNamesForTts();
+        if (names == 'Your cart is empty.') {
+          return _speak('Your cart is empty.');
+        }
+        return _speak('Here are the items in your cart: $names');
 
       case VoiceIntentKind.initiateCheckout:
         switchToTab(tabCart);

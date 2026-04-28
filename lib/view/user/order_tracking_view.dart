@@ -389,16 +389,31 @@ class OrderTrackingView extends StatelessWidget {
           const SizedBox(height: 12),
           ...items.map((item) {
             final itemMap = item as Map<String, dynamic>;
+            final note = (itemMap['note'] ?? '').toString().trim();
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text('${itemMap['quantity']}x ${itemMap['name']}').small(),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${itemMap['quantity']}x ${itemMap['name']}',
+                        ).small(),
+                      ),
+                      Text(
+                        formatPkr(itemMap['itemTotal']),
+                        style: TextStyle(color: theme.colorScheme.primary),
+                      ),
+                    ],
                   ),
-                  Text(formatPkr(itemMap['itemTotal']),
-                      style: TextStyle(color: theme.colorScheme.primary)),
+                  if (note.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('Customisation: $note').muted().xSmall(),
+                    ),
                 ],
               ),
             );

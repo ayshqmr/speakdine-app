@@ -6,7 +6,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:speak_dine/utils/pkr_format.dart';
 
 const _statusFlow = ['pending', 'accepted', 'in_kitchen', 'handed_to_rider', 'on_the_way', 'delivered'];
 
@@ -65,7 +64,7 @@ class _OrdersViewState extends State<OrdersView> {
                 debugPrint('[RestaurantOrders] Orders stream error: ${snapshot.error}');
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (context.mounted) {
-                    showAppToast(context, 'Unable to load orders. Please try again.');
+                    showAppToast(context, 'Unable to load orders. Please try again.', isError: true);
                   }
                 });
                 return Center(
@@ -190,6 +189,7 @@ class _OrdersViewState extends State<OrdersView> {
               .small(),
           const SizedBox(height: 4),
           Text('Items: ${order['itemCount'] ?? 0}').muted().small(),
+          ..._buildOrderItemsWithNotes(theme, order),
           if (customerAddress != null && customerAddress.isNotEmpty) ...[
             const SizedBox(height: 4),
             Row(
@@ -217,7 +217,7 @@ class _OrdersViewState extends State<OrdersView> {
           ],
           const SizedBox(height: 4),
           Text(
-            formatPkr(order['total']),
+            '${order['total']?.toStringAsFixed(2) ?? '0.00'} PKR',
             style: TextStyle(
               color: theme.colorScheme.primary,
               fontWeight: FontWeight.w700,
@@ -310,6 +310,46 @@ class _OrdersViewState extends State<OrdersView> {
     );
   }
 
+  List<Widget> _buildOrderItemsWithNotes(
+    ThemeData theme,
+    Map<String, dynamic> order,
+  ) {
+    final raw = order['items'];
+    if (raw is! List || raw.isEmpty) {
+      return const [];
+    }
+    final lines = <Widget>[const SizedBox(height: 8)];
+    final maxItems = raw.length > 5 ? 5 : raw.length;
+    for (var i = 0; i < maxItems; i++) {
+      final itemRaw = raw[i];
+      if (itemRaw is! Map) {
+        continue;
+      }
+      final item = Map<String, dynamic>.from(itemRaw);
+      final name = (item['name'] ?? 'Item').toString().trim();
+      final quantity = item['quantity'];
+      var qty = 1;
+      if (quantity is num) {
+        qty = quantity.toInt().clamp(1, 999);
+      }
+      final note = (item['note'] ?? '').toString().trim();
+      lines.add(
+        Text('- $qty x $name').muted().small(),
+      );
+      if (note.isNotEmpty) {
+        lines.add(
+          Text('  Customisation: $note').xSmall().muted(),
+        );
+      }
+    }
+    if (raw.length > maxItems) {
+      lines.add(
+        Text('...and ${raw.length - maxItems} more items').xSmall().muted(),
+      );
+    }
+    return lines;
+  }
+
   Widget _buildPaymentBadge(ThemeData theme, Map<String, dynamic> order) {
     final paymentMethod = order['paymentMethod'] as String? ?? 'cod';
     final paymentStatus = order['paymentStatus'] as String? ?? 'pending';
@@ -390,29 +430,21 @@ class _OrdersViewState extends State<OrdersView> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Accept Order'),
-        content: SingleChildScrollView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-          child: SizedBox(
-            width: 300,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Order from ${order['customerName'] ?? 'Customer'}')
-                    .muted()
-                    .small(),
-                const SizedBox(height: 16),
-                const Text('Estimated delivery time (minutes)')
-                    .semiBold()
-                    .small(),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: etaController,
-                  placeholder: const Text('30'),
-                ),
-              ],
-            ),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Order from ${order['customerName'] ?? 'Customer'}').muted().small(),
+              const SizedBox(height: 16),
+              const Text('Estimated delivery time (minutes)').semiBold().small(),
+              const SizedBox(height: 6),
+              TextField(
+                controller: etaController,
+                placeholder: const Text('30'),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -465,7 +497,7 @@ class _OrdersViewState extends State<OrdersView> {
     } catch (e) {
       debugPrint('[OrdersView] Accept error: $e');
       if (!mounted) return;
-      showAppToast(context, 'Something went wrong. Please try again later.');
+      showAppToast(context, 'Something went wrong. Please try again later.', isError: true);
     }
   }
 
@@ -505,7 +537,7 @@ class _OrdersViewState extends State<OrdersView> {
     } catch (e) {
       debugPrint('[OrdersView] Status update error: $e');
       if (!mounted) return;
-      showAppToast(context, 'Something went wrong. Please try again later.');
+      showAppToast(context, 'Something went wrong. Please try again later.', isError: true);
     }
   }
 

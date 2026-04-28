@@ -32,3 +32,22 @@ String? sdLibRestaurantCategoryLabel(String? id) {
   }
   return id;
 }
+
+/// Explore/home filter: [null] means every category. Normalizes empty strings,
+/// aliases like "all", and unknown ids so the list is not accidentally cleared.
+String? sdLibNormalizeExploreCategoryId(String? raw) {
+  if (raw == null) return null;
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return null;
+  final lower = trimmed.toLowerCase();
+  if (lower == 'all' ||
+      lower == 'any' ||
+      lower == 'everything' ||
+      lower == 'clear') {
+    return null;
+  }
+  for (final c in kSdLibRestaurantCategories) {
+    if (c.id == trimmed || c.id.toLowerCase() == lower) return c.id;
+  }
+  return null;
+}

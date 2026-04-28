@@ -4,10 +4,7 @@ import 'package:speak_dine/widgets/customer_voice_fab.dart';
 
 /// Ported from SD-lib `CustomerSettingsView` (layout preserved, theme-adapted).
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key, this.showVoiceFab = true});
-
-  /// Customer voice assistant FAB; off for restaurant settings (no overlap).
-  final bool showVoiceFab;
+  const SettingsView({super.key});
 
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -39,89 +36,87 @@ class _SettingsViewState extends State<SettingsView> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                _buildSection(
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 120),
+        child: Column(
+          children: [
+            _buildSection(
+              theme,
+              "Account Security",
+              [
+                _buildSettingTile(
                   theme,
-                  "Account Security",
-                  [
-                    _buildSettingTile(
-                      theme,
-                      "Change Password",
-                      Icons.lock_outline_rounded,
-                      () {},
-                    ),
-                    _buildSettingTile(
-                      theme,
-                      "Two-Factor Authentication",
-                      Icons.security_rounded,
-                      () {},
-                    ),
-                  ],
+                  "Change Password",
+                  Icons.lock_outline_rounded,
+                  () {},
                 ),
-                const SizedBox(height: 24),
-                _buildSection(
+                _buildSettingTile(
                   theme,
-                  "Preferences",
-                  [
-                    _buildSwitchTile(
-                      theme,
-                      "Push Notifications",
-                      Icons.notifications_active_outlined,
-                      _notificationsEnabled,
-                      (v) => setState(() => _notificationsEnabled = v),
-                    ),
-                    _buildSwitchTile(
-                      theme,
-                      "Location Services",
-                      Icons.location_on_outlined,
-                      _locationSharing,
-                      (v) => setState(() => _locationSharing = v),
-                    ),
-                  ],
+                  "Two-Factor Authentication",
+                  Icons.security_rounded,
+                  () {},
                 ),
-                const SizedBox(height: 24),
-                _buildSection(
-                  theme,
-                  "App Info",
-                  [
-                    _buildSettingTile(
-                      theme,
-                      "Terms of Service",
-                      Icons.description_outlined,
-                      () {},
-                    ),
-                    _buildSettingTile(
-                      theme,
-                      "Privacy Policy",
-                      Icons.privacy_tip_outlined,
-                      () {},
-                    ),
-                    _buildSettingTile(
-                      theme,
-                      "App Version",
-                      Icons.info_outline_rounded,
-                      () {},
-                      trailing: const Text(
-                        "1.0.0",
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 40),
               ],
             ),
-          ),
-          if (widget.showVoiceFab)
-            const CustomerVoiceFabPositioned(hasBottomDock: false),
-        ],
+            const SizedBox(height: 24),
+            _buildSection(
+              theme,
+              "Preferences",
+              [
+                _buildSwitchTile(
+                  theme,
+                  "Push Notifications",
+                  Icons.notifications_active_outlined,
+                  _notificationsEnabled,
+                  (v) => setState(() => _notificationsEnabled = v),
+                ),
+                _buildSwitchTile(
+                  theme,
+                  "Location Services",
+                  Icons.location_on_outlined,
+                  _locationSharing,
+                  (v) => setState(() => _locationSharing = v),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _buildSection(
+              theme,
+              "App Info",
+              [
+                _buildSettingTile(
+                  theme,
+                  "Terms of Service",
+                  Icons.description_outlined,
+                  () {},
+                ),
+                _buildSettingTile(
+                  theme,
+                  "Privacy Policy",
+                  Icons.privacy_tip_outlined,
+                  () {},
+                ),
+                _buildSettingTile(
+                  theme,
+                  "App Version",
+                  Icons.info_outline_rounded,
+                  () {},
+                  trailing: const Text(
+                    "1.0.0",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
+      floatingActionButton: const Padding(
+        padding: EdgeInsets.only(right: 8, bottom: 8),
+        child: CustomerVoiceMicRow(),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 

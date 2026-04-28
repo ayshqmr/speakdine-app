@@ -30,6 +30,62 @@ class _CartViewState extends State<CartView> {
     setState(() => cartService.decreaseQuantity(restaurantId, index));
   }
 
+  void _editCustomizationNote(
+    ThemeData theme,
+    String restaurantId,
+    int index,
+    Map<String, dynamic> item,
+  ) {
+    final name = (item['name'] ?? 'item').toString();
+    final initial = (item['note'] ?? '').toString();
+    final controller = TextEditingController(text: initial);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Customisation for $name'),
+        content: SizedBox(
+          width: 340,
+          child: TextField(
+            controller: controller,
+            placeholder: const Text('Example: no onions, extra spicy'),
+            maxLines: 3,
+          ),
+        ),
+        actions: [
+          OutlineButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          OutlineButton(
+            onPressed: () {
+              setState(() {
+                cartService.updateItemNote(restaurantId, index, '');
+              });
+              Navigator.pop(ctx);
+            },
+            child: Text(
+              'Clear',
+              style: TextStyle(color: theme.colorScheme.destructive),
+            ),
+          ),
+          PrimaryButton(
+            onPressed: () {
+              setState(() {
+                cartService.updateItemNote(
+                  restaurantId,
+                  index,
+                  controller.text.trim(),
+                );
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   static const _stripeMinimumPkr = 150.0;
 
   @override
@@ -183,6 +239,7 @@ class _CartViewState extends State<CartView> {
         for (var item in items) {
           final quantity = item['quantity'] ?? 1;
           final itemTotal = (item['price'] ?? 0) * quantity;
+          final note = (item['note'] ?? '').toString().trim();
           restaurantTotal += itemTotal;
           totalQuantity += quantity as int;
           orderItems.add({
@@ -191,6 +248,7 @@ class _CartViewState extends State<CartView> {
             'price': item['price'],
             'quantity': quantity,
             'itemTotal': itemTotal,
+            'note': note,
           });
         }
 
@@ -276,7 +334,6 @@ class _CartViewState extends State<CartView> {
               items: orderItems,
               orderId: customerOrderRef.id,
               connectedAccountId: connectedAccountId,
-              firebaseUid: user.uid,
               platformDebtPaisa: currentDebtPaisa,
             );
 
@@ -295,14 +352,33 @@ class _CartViewState extends State<CartView> {
               return false;
             }
 
-            // Debt recovery and `transactions` doc run after payment in
-            // PaymentService.handleStripeCheckoutReturnIfPresent (web).
+            if (payResult.debtRecoveredPaisa > 0) {
+              await _firestore
+                  .collection('platformDebts')
+                  .doc(restaurantId)
+                  .set({
+                    'amount': FieldValue.increment(-payResult.debtRecoveredPkr),
+                  }, SetOptions(merge: true));
+            }
+
+            await _saveTransaction(
+              customerId: user.uid,
+              customerName: customerName,
+              restaurantId: restaurantId,
+              restaurantName: items.first['restaurantName'] ?? 'Restaurant',
+              orderId: customerOrderRef.id,
+              amount: restaurantTotal,
+              platformFee: payResult.normalFeePkr,
+              restaurantAmount: payResult.restaurantAmountPkr,
+              paymentMethod: 'online',
+              debtRecovered: payResult.debtRecoveredPkr,
+              debtRemaining: currentDebtPkr - payResult.debtRecoveredPkr,
+            );
           } else {
             final sessionId = await PaymentService.openCheckout(
               stripeCustomerId: customerId,
               items: orderItems,
               orderId: customerOrderRef.id,
-              firebaseUid: user.uid,
             );
 
             if (sessionId == null) {
@@ -320,8 +396,18 @@ class _CartViewState extends State<CartView> {
               return false;
             }
 
-            // `transactions` doc is created after successful payment in
-            // PaymentService.handleStripeCheckoutReturnIfPresent (web).
+            final platformFee = restaurantTotal * 0.05;
+            await _saveTransaction(
+              customerId: user.uid,
+              customerName: customerName,
+              restaurantId: restaurantId,
+              restaurantName: items.first['restaurantName'] ?? 'Restaurant',
+              orderId: customerOrderRef.id,
+              amount: restaurantTotal,
+              platformFee: platformFee,
+              restaurantAmount: restaurantTotal - platformFee,
+              paymentMethod: 'online',
+            );
           }
         }
 
@@ -672,6 +758,7 @@ class _CartViewState extends State<CartView> {
     Map<String, dynamic> item,
   ) {
     final itemTotal = (item['price'] ?? 0) * (item['quantity'] ?? 1);
+    final note = (item['note'] ?? '').toString().trim();
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -683,6 +770,15 @@ class _CartViewState extends State<CartView> {
               children: [
                 Text(item['name'] ?? 'Item').semiBold().small(),
                 Text('${formatPkr(item['price'])} each').muted().small(),
+                if (note.isNotEmpty)
+                  Text('Customisation: $note').muted().xSmall(),
+                const SizedBox(height: 6),
+                GhostButton(
+                  density: ButtonDensity.compact,
+                  onPressed: () =>
+                      _editCustomizationNote(theme, restaurantId, index, item),
+                  child: const Text('Edit customisation').xSmall(),
+                ),
               ],
             ),
           ),

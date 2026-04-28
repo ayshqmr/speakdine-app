@@ -82,6 +82,18 @@ class CustomerVoiceBridge {
   /// After empty-cart line offering browse or search.
   bool voiceAwaitingEmptyCartBrowsePrompt = false;
 
+  /// After successful add-to-cart, awaiting yes/no for customization.
+  bool voiceAwaitingCustomizeYesNo = false;
+
+  /// Waiting for free-text customization note to save for [pendingVoiceCustomizationItem].
+  bool voiceAwaitingCustomizationText = false;
+
+  /// Item name currently targeted for customization note updates.
+  String? pendingVoiceCustomizationItem;
+
+  /// Awaiting item name after "remove customization" without a target item.
+  bool voiceAwaitingRemoveCustomizationItem = false;
+
   /// Dish name (or search phrase) the user asked to add; cleared after confirm or cancel flow.
   String? pendingVoiceCartItem;
 
@@ -190,6 +202,10 @@ class CustomerVoiceBridge {
     voiceAwaitingCartAddMorePrompt = false;
     voiceAwaitingCartOrderOrChangesPrompt = false;
     voiceAwaitingEmptyCartBrowsePrompt = false;
+    voiceAwaitingCustomizeYesNo = false;
+    voiceAwaitingCustomizationText = false;
+    pendingVoiceCustomizationItem = null;
+    voiceAwaitingRemoveCustomizationItem = false;
     pendingVoiceCartItem = null;
     confirmVoiceAddToCartFromMenu = null;
     openPendingReviewDialog = null;

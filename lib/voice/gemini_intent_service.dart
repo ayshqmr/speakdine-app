@@ -16,7 +16,7 @@ class GeminiIntentService {
   static const String _allowedKinds = '''
 nonFood, unknown, cancelAction,
 addToCartRequest, selectMenuItem, confirmAddToCart,
-openCartIntent, cartNaturalLanguageEdit,
+openCartIntent, cartNaturalLanguageEdit, customizeCartItem, provideCustomizationNote, removeCartItemCustomization, listCartItemsIntent,
 initiateCheckout, confirmOrderUIOnly, cancelCheckout,
 openSettings, toggleSetting, updateSettingValue,
 addToCartIntent, ambiguousOrderIntent,
@@ -58,15 +58,18 @@ Return STRICT JSON only:
 }
 
 Rules:
-- addToCartRequest: user wants to put food in the cart — phrases like **add [item]**, **add [item] to cart**, **add [item] to my cart**, **put [item] in cart**. Put **only the dish name** in itemName (e.g. itemName **Zinger Burger** for "add zinger burger to cart"). If itemName is empty, put the same dish-only string in extractedQuery. Use addToCartRequest (not selectMenuItem) for these; SpeakDine adds immediately when a restaurant menu is open.
+- addToCartRequest: user wants to add food; put dish in itemName or extractedQuery.
 - confirmAddToCart: yes / add it / confirm / put in cart while meaning confirm.
 - initiateCheckout: user wants to place order; app opens cart payment options (COD vs online). confirmOrderUIOnly: only remind to confirm on screen.
 - ambiguousOrderIntent: could mean order food vs place order vs cart.
 - updateSettingValue: use settingKey username + settingValue for name changes.
 - cancelAction / cancelCurrentFlow: stop or never mind.
 - trackOrderIntent: user wants to track an active order, see delivery status, or where the order is.
-- Phrases like **rate and review**, **leave a review**, **write a review**: the SpeakDine client opens the review dialog first — use **unknown** or **nonFood** with low confidence and short speech, or **intent null** in the conversational API; do not map these to cart or checkout.
 - cartNaturalLanguageEdit: change cart by voice in one sentence (remove, add one more, etc.); put full utterance in extractedQuery.
+- customizeCartItem: user asks to customize a specific cart item; put item in itemName.
+- provideCustomizationNote: spoken customization text to store as note (use extractedQuery).
+- removeCartItemCustomization: remove customization note; use itemName when provided.
+- listCartItemsIntent: user asks to read dishes/items/food currently in cart.
 
 Utterance:
 "$text"
@@ -194,6 +197,14 @@ Utterance:
         return VoiceIntentKind.openCartIntent;
       case 'cartNaturalLanguageEdit':
         return VoiceIntentKind.cartNaturalLanguageEdit;
+      case 'customizeCartItem':
+        return VoiceIntentKind.customizeCartItem;
+      case 'provideCustomizationNote':
+        return VoiceIntentKind.provideCustomizationNote;
+      case 'removeCartItemCustomization':
+        return VoiceIntentKind.removeCartItemCustomization;
+      case 'listCartItemsIntent':
+        return VoiceIntentKind.listCartItemsIntent;
       case 'initiateCheckout':
         return VoiceIntentKind.initiateCheckout;
       case 'confirmOrderUIOnly':

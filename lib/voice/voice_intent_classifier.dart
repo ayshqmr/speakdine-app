@@ -28,10 +28,14 @@ class VoiceIntentClassifier {
     hit ??= _ambiguousOrder(lower);
     hit ??= _confirmAdd(lower);
     hit ??= _addToCartVague(lower, raw);
-    hit ??= _cartNaturalLanguage(lower, raw);
     hit ??= _addToCartExplicit(lower, raw);
+    hit ??= _listCartItems(lower);
+    hit ??= _removeCustomization(lower, raw);
+    hit ??= _customizeItem(lower, raw);
+    hit ??= _provideCustomizationNote(lower, raw);
     hit ??= _selectMenu(lower, raw);
     hit ??= _category(lower);
+    hit ??= _cartNaturalLanguage(lower, raw);
     hit ??= _classifyChangeUserNameAsUpdate(lower, raw);
 
     if (hit != null) {
@@ -333,32 +337,30 @@ class VoiceIntentClassifier {
   }
 
   VoiceIntentResult? _addToCartExplicit(String lower, String raw) {
-    if (_looksLikeCartNaturalLanguageEdit(lower)) {
+    if (!_matches(lower, [
+          'add to cart',
+          'add in cart',
+          'cart mein',
+          'cart me ',
+          'put in cart',
+        ]) &&
+        !(lower.contains('add') && lower.contains('cart'))) {
       return null;
     }
-    final item = _extractItemNameFromAddUtterance(lower);
-    if (item == null || item.isEmpty) {
-      return null;
-    }
-    final startsAddOrPut = RegExp(
-      r'^\s*(please\s+)?(add|put)\b',
-    ).hasMatch(lower);
-    final mentionsCart = lower.contains('cart') ||
-        lower.contains('cart mein') ||
-        lower.contains('cart me ');
-    if (!startsAddOrPut && !(lower.contains('add') && mentionsCart)) {
-      return null;
-    }
+    final item = _extractItemNameForAddToCart(lower);
     return VoiceIntentResult(
       kind: VoiceIntentKind.addToCartRequest,
       isFoodOrOrderingRelated: true,
-      confidence: 0.86,
+      confidence: 0.82,
       itemName: item,
       extractedQuery: raw.trim(),
     );
   }
 
   VoiceIntentResult? _selectMenu(String lower, String raw) {
+    if (RegExp(r'\bcustomi[sz](e|ation)\b').hasMatch(lower)) {
+      return null;
+    }
     if (_matches(lower, [
       'open ',
       'kholo ',
@@ -424,6 +426,94 @@ class VoiceIntentClassifier {
       isFoodOrOrderingRelated: true,
       confidence: 0.82,
       extractedQuery: raw.trim(),
+    );
+  }
+
+  VoiceIntentResult? _listCartItems(String lower) {
+    if (_matches(lower, [
+          'items in the cart',
+          'items in cart',
+          'dishes in the cart',
+          'dishes in cart',
+          'food in the cart',
+          'food in cart',
+          'cart dishes',
+          'cart items',
+          'cart food',
+        ]) ||
+        lower == 'cart items' ||
+        lower == 'cart dishes') {
+      return const VoiceIntentResult(
+        kind: VoiceIntentKind.listCartItemsIntent,
+        isFoodOrOrderingRelated: true,
+        confidence: 0.86,
+      );
+    }
+    return null;
+  }
+
+  VoiceIntentResult? _removeCustomization(String lower, String raw) {
+    if (!RegExp(r'\b(remove|delete)\b').hasMatch(lower) ||
+        !(lower.contains('customization') || lower.contains('customisation'))) {
+      return null;
+    }
+    String? item;
+    final m = RegExp(
+      r'(?:remove|delete)\s+customi[sz]ation(?:\s+of|\s+for)?\s+(.+)$',
+    ).firstMatch(raw);
+    if (m != null) {
+      item = m.group(1)?.trim();
+    }
+    return VoiceIntentResult(
+      kind: VoiceIntentKind.removeCartItemCustomization,
+      isFoodOrOrderingRelated: true,
+      confidence: 0.84,
+      itemName: item,
+      extractedQuery: raw.trim(),
+    );
+  }
+
+  VoiceIntentResult? _customizeItem(String lower, String raw) {
+    if (!(lower.contains('customize') || lower.contains('customise'))) {
+      return null;
+    }
+    var item = '';
+    final m1 = RegExp(r'^customi[sz]e(?:\s+the)?\s+(.+)$').firstMatch(raw);
+    final m2 = RegExp(r'^(.+)\s+customi[sz]e$').firstMatch(raw);
+    if (m1 != null) {
+      item = m1.group(1)?.trim() ?? '';
+    } else if (m2 != null) {
+      item = m2.group(1)?.trim() ?? '';
+    }
+    if (item.isEmpty) {
+      return null;
+    }
+    return VoiceIntentResult(
+      kind: VoiceIntentKind.customizeCartItem,
+      isFoodOrOrderingRelated: true,
+      confidence: 0.84,
+      itemName: item,
+      extractedQuery: raw.trim(),
+    );
+  }
+
+  VoiceIntentResult? _provideCustomizationNote(String lower, String raw) {
+    if (!RegExp(r'\bcustomi[sz]ation\b').hasMatch(lower)) {
+      return null;
+    }
+    final m = RegExp(r'customi[sz]ation(?:\s+for)?\s+(.+)$').firstMatch(raw);
+    if (m == null) {
+      return null;
+    }
+    final rest = m.group(1)?.trim() ?? '';
+    if (rest.isEmpty) {
+      return null;
+    }
+    return VoiceIntentResult(
+      kind: VoiceIntentKind.provideCustomizationNote,
+      isFoodOrOrderingRelated: true,
+      confidence: 0.72,
+      extractedQuery: rest,
     );
   }
 
@@ -521,50 +611,20 @@ class VoiceIntentClassifier {
     return null;
   }
 
-  /// When the cloud model mislabels **add [item]** as [selectMenuItem], recover the dish name.
-  String? parseAddToCartItemName(String raw) {
-    final lower = raw.toLowerCase().trim();
-    if (lower.isEmpty || _looksLikeCartNaturalLanguageEdit(lower)) {
-      return null;
+  String? _extractItemNameForAddToCart(String lower) {
+    var without = lower;
+    for (final p in [
+      'add to cart',
+      'add in cart',
+      'put in cart',
+      'cart mein',
+      'cart me',
+    ]) {
+      without = without.replaceAll(p, ' ');
     }
-    final item = _extractItemNameFromAddUtterance(lower);
-    if (item == null || item.isEmpty) {
-      return null;
-    }
-    final startsAddOrPut = RegExp(
-      r'^\s*(please\s+)?(add|put)\b',
-    ).hasMatch(lower);
-    final mentionsCart = lower.contains('cart') ||
-        lower.contains('cart mein') ||
-        lower.contains('cart me ');
-    if (!startsAddOrPut && !(lower.contains('add') && mentionsCart)) {
-      return null;
-    }
-    return item;
-  }
-
-  /// Strips "add … to cart" / "add …" / "put … in cart" → dish name for menu match.
-  String? _extractItemNameFromAddUtterance(String lower) {
-    var s = lower.trim();
-    s = s.replaceFirst(RegExp(r'^please\s+'), '');
-    final patterns = <RegExp>[
-      RegExp(r'^add\s+(.+?)\s+to\s+my\s+cart\s*$'),
-      RegExp(r'^add\s+(.+?)\s+to\s+cart\s*$'),
-      RegExp(r'^add\s+(.+?)\s+in\s+cart\s*$'),
-      RegExp(r'^put\s+(.+?)\s+in\s+cart\s*$'),
-      RegExp(r'^add\s+(.+?)\s+into\s+cart\s*$'),
-      RegExp(r'^add\s+(.+)$'),
-    ];
-    for (final re in patterns) {
-      final m = re.firstMatch(s);
-      if (m != null && m.groupCount >= 1) {
-        var item = (m.group(1) ?? '').trim();
-        item = item.replaceAll(RegExp(r'\s+please\s*$'), '').trim();
-        item = item.replaceAll(RegExp(r'^(?:the|a|an)\s+'), '').trim();
-        if (item.length >= 2) {
-          return item;
-        }
-      }
+    without = without.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (without.length > 1) {
+      return without;
     }
     return null;
   }

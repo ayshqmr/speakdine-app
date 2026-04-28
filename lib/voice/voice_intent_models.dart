@@ -15,6 +15,10 @@ enum VoiceIntentKind {
 
   /// Multi-clause edits, e.g. "add one more coffee and remove sandwich".
   cartNaturalLanguageEdit,
+  customizeCartItem,
+  provideCustomizationNote,
+  removeCartItemCustomization,
+  listCartItemsIntent,
 
   // order safety (never auto-submits payment)
   initiateCheckout,

@@ -10,12 +10,16 @@ class SdLibRestaurantExploreFilters {
     this.openNowOnly = true,
   });
 
-  /// `null` means all categories.
+  /// Raw stored value; may be empty or non-taxonomy. Prefer [effectiveCategoryId] for logic.
   final String? categoryId;
   final bool openNowOnly;
 
+  /// `null` means show restaurants from every category.
+  String? get effectiveCategoryId =>
+      sdLibNormalizeExploreCategoryId(categoryId);
+
   int get activeCount =>
-      (categoryId != null ? 1 : 0) + (openNowOnly ? 1 : 0);
+      (effectiveCategoryId != null ? 1 : 0) + (openNowOnly ? 1 : 0);
 
   bool get hasActiveFilters => activeCount > 0;
 }
@@ -36,7 +40,7 @@ class SdLibRestaurantFilterStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = theme;
-    final selectedId = filters.categoryId;
+    final selectedId = filters.effectiveCategoryId;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -92,7 +96,7 @@ class SdLibRestaurantFilterStrip extends StatelessWidget {
                 value: filters.openNowOnly,
                 onChanged: (v) => onChanged(
                   SdLibRestaurantExploreFilters(
-                    categoryId: filters.categoryId,
+                    categoryId: filters.effectiveCategoryId,
                     openNowOnly: v,
                   ),
                 ),
@@ -343,7 +347,7 @@ class _SdLibFilterSheetBodyState extends State<_SdLibFilterSheetBody> {
   @override
   void initState() {
     super.initState();
-    _categoryId = widget.initial.categoryId;
+    _categoryId = widget.initial.effectiveCategoryId;
     _openNowOnly = widget.initial.openNowOnly;
   }
 
@@ -480,7 +484,8 @@ class _SdLibFilterSheetBodyState extends State<_SdLibFilterSheetBody> {
                           Navigator.pop(
                             context,
                             SdLibRestaurantExploreFilters(
-                              categoryId: _categoryId,
+                              categoryId:
+                                  sdLibNormalizeExploreCategoryId(_categoryId),
                               openNowOnly: _openNowOnly,
                             ),
                           );

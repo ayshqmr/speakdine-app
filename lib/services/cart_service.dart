@@ -115,6 +115,7 @@ class CartService {
       'name': '${m['name'] ?? ''}',
       'price': price,
       'description': m['description']?.toString() ?? '',
+      'note': m['note']?.toString() ?? '',
       'quantity': quantity.clamp(1, 999),
       'restaurantId': '${m['restaurantId'] ?? ''}',
       'restaurantName': '${m['restaurantName'] ?? ''}',
@@ -177,6 +178,7 @@ class CartService {
         'name': item['name'],
         'price': price,
         'description': item['description'],
+        'note': item['note']?.toString() ?? '',
         'quantity': 1,
         'restaurantId': restaurantId,
         'restaurantName': restaurantName,
@@ -214,6 +216,16 @@ class CartService {
     _notifyCartUi();
   }
 
+  void updateItemNote(String restaurantId, int index, String note) {
+    final list = cart[restaurantId];
+    if (list == null || index < 0 || index >= list.length) {
+      return;
+    }
+    list[index]['note'] = note.trim();
+    _persist();
+    _notifyCartUi();
+  }
+
   void clearCart() {
     cart.clear();
     _persist();
@@ -234,6 +246,121 @@ class CartService {
   bool get isEmpty => cart.isEmpty;
 
   bool get isNotEmpty => cart.isNotEmpty;
+
+  bool _nameMatches(String cartName, String needle) {
+    final n = cartName.toLowerCase().trim();
+    final q = needle.toLowerCase().trim();
+    if (n.isEmpty || q.isEmpty) {
+      return false;
+    }
+    if (n == q || n.contains(q) || q.contains(n)) {
+      return true;
+    }
+    for (final w in q.split(RegExp(r'\s+')).where((e) => e.length > 2)) {
+      if (n.contains(w)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  int setNoteForMatchingItems(String itemNeedle, String note) {
+    final trimmedNeedle = itemNeedle.trim();
+    if (trimmedNeedle.isEmpty) {
+      return 0;
+    }
+    var updates = 0;
+    for (final entry in cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString();
+        if (_nameMatches(name, trimmedNeedle)) {
+          item['note'] = note.trim();
+          updates++;
+        }
+      }
+    }
+    if (updates > 0) {
+      _persist();
+      _notifyCartUi();
+    }
+    return updates;
+  }
+
+  int clearNoteForMatchingItems(String itemNeedle) {
+    return setNoteForMatchingItems(itemNeedle, '');
+  }
+
+  bool hasMatchingItem(String itemNeedle) {
+    final trimmedNeedle = itemNeedle.trim();
+    if (trimmedNeedle.isEmpty) {
+      return false;
+    }
+    for (final entry in cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString();
+        if (_nameMatches(name, trimmedNeedle)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  String? firstNoteForMatchingItem(String itemNeedle) {
+    final trimmedNeedle = itemNeedle.trim();
+    if (trimmedNeedle.isEmpty) {
+      return null;
+    }
+    for (final entry in cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString();
+        if (!_nameMatches(name, trimmedNeedle)) {
+          continue;
+        }
+        final note = (item['note'] ?? '').toString().trim();
+        if (note.isNotEmpty) {
+          return note;
+        }
+      }
+    }
+    return null;
+  }
+
+  List<String> cartItemNames({bool unique = true}) {
+    final names = <String>[];
+    final seen = <String>{};
+    for (final entry in cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          continue;
+        }
+        final key = name.toLowerCase();
+        if (unique && seen.contains(key)) {
+          continue;
+        }
+        seen.add(key);
+        names.add(name);
+      }
+    }
+    return names;
+  }
+
+  String? firstMatchingItemNameInText(String text) {
+    final lower = text.toLowerCase();
+    for (final entry in cart.entries) {
+      for (final item in entry.value) {
+        final name = (item['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          continue;
+        }
+        if (lower.contains(name.toLowerCase())) {
+          return name;
+        }
+      }
+    }
+    return null;
+  }
 }
 
 final cartService = CartService();

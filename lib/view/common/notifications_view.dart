@@ -42,18 +42,16 @@ class _NotificationsViewState extends State<NotificationsView> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned.fill(
-            child: widget.restaurantRealtime
-                ? _RestaurantNotificationsBody(theme: theme)
-                : _CustomerNotificationsPlaceholder(theme: theme),
-          ),
-          if (!widget.restaurantRealtime)
-            const CustomerVoiceFabPositioned(hasBottomDock: false),
-        ],
-      ),
+      body: widget.restaurantRealtime
+          ? _RestaurantNotificationsBody(theme: theme)
+          : _CustomerNotificationsPlaceholder(theme: theme),
+      floatingActionButton: widget.restaurantRealtime
+          ? null
+          : const Padding(
+              padding: EdgeInsets.only(right: 8, bottom: 8),
+              child: CustomerVoiceMicRow(),
+            ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }
@@ -66,27 +64,27 @@ class _CustomerNotificationsPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.receipt_long_rounded,
-            size: 100,
-            color: theme.colorScheme.primary.withValues(alpha: 0.12),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Order updates',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
-              color: theme.colorScheme.onSurfaceVariant,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.receipt_long_rounded,
+              size: 100,
+              color: theme.colorScheme.primary.withValues(alpha: 0.12),
             ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Text(
+            const SizedBox(height: 24),
+            Text(
+              'Order updates',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
               'Track your orders under My Orders. Live alerts are available in the restaurant app for merchants.',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -96,8 +94,8 @@ class _CustomerNotificationsPlaceholder extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.9),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ).animate().fadeIn(),
     );
   }

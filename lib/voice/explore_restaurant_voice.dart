@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
 import 'package:speak_dine/utils/city_normalize.dart';
 import 'package:speak_dine/utils/restaurant_hours.dart';
 
@@ -34,13 +35,13 @@ Future<RestaurantNamePage?> fetchRestaurantNamesForVoice({
     return null;
   }
   final docs = await firestore.collection('restaurants').get();
+  final cat = sdLibNormalizeExploreCategoryId(categoryId);
   final filtered = docs.docs.where((d) {
     final m = d.data();
     if (!restaurantCityMatchesUserExplore(cityKey, m)) {
       return false;
     }
-    if (categoryId != null &&
-        (m['restaurantCategory'] as String?) != categoryId) {
+    if (cat != null && (m['restaurantCategory'] as String?) != cat) {
       return false;
     }
     if (openNowOnly && !isRestaurantOpenNow(m)) {

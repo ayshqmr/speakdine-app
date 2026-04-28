@@ -16,6 +16,15 @@ const _activeStatuses = {
   'on_the_way',
 };
 
+const _statusDisplayLabels = {
+  'pending': 'Pending',
+  'accepted': 'Accepted',
+  'in_kitchen': 'In Kitchen',
+  'handed_to_rider': 'With Rider',
+  'on_the_way': 'On the Way',
+  'delivered': 'Delivered',
+};
+
 class CustomerOrdersView extends StatelessWidget {
   /// When opened from Profile (pushed route), show a back control. The Orders tab
   /// uses [showBackButton] false — same widget, embedded in [CustomerShell].
@@ -209,18 +218,8 @@ class CustomerOrdersView extends StatelessWidget {
     final isDelivered = status == 'delivered';
     final reviewed = order['reviewed'] == true;
 
-    final paymentMethod = order['paymentMethod'] as String? ?? 'cod';
-    final paymentStatus = order['paymentStatus'] as String? ?? 'pending';
-    final isCod = paymentMethod == 'cod';
-    final isOnlinePaid = !isCod && paymentStatus == 'paid';
-
-    /// COD: track only after delivery (cash collected). Online: track once paid, through delivery.
-    final canOpenTracking = isCod
-        ? isDelivered
-        : isOnlinePaid && (isActive || isDelivered);
-
     return GestureDetector(
-      onTap: canOpenTracking
+      onTap: isActive || isDelivered
           ? () {
               Navigator.of(context, rootNavigator: true).push(
                 MaterialPageRoute(
@@ -249,9 +248,9 @@ class CustomerOrdersView extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: Text(restaurantName).semiBold()),
-                _buildPaymentChip(theme, order, isDelivered),
+                _buildPaymentChip(theme, order),
                 const SizedBox(width: 6),
-                _buildStatusChip(theme, order, status),
+                _buildStatusChip(theme, status),
               ],
             ),
             const SizedBox(height: 10),
@@ -274,7 +273,8 @@ class CustomerOrdersView extends StatelessWidget {
                 ),
               ],
             ),
-            if (canOpenTracking) ...[
+            ..._buildOrderItemPreview(theme, order),
+            if (isActive) ...[
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -285,7 +285,7 @@ class CustomerOrdersView extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    isDelivered ? 'Tap to view order' : 'Tap to track',
+                    'Tap to track',
                     style: TextStyle(
                       color: theme.colorScheme.primary,
                       fontSize: 12,
@@ -368,33 +368,22 @@ class CustomerOrdersView extends StatelessWidget {
     );
   }
 
-  Widget _buildPaymentChip(
-    ThemeData theme,
-    Map<String, dynamic> order,
-    bool isDelivered,
-  ) {
+  Widget _buildPaymentChip(ThemeData theme, Map<String, dynamic> order) {
     final paymentMethod = order['paymentMethod'] as String? ?? 'cod';
     final paymentStatus = order['paymentStatus'] as String? ?? 'pending';
 
+    final bool isPaid = paymentStatus == 'paid';
     final bool isCod = paymentMethod == 'cod';
-    final bool firestorePaid = paymentStatus == 'paid';
 
     final String label;
     final Color bgColor;
     final Color textColor;
 
     if (isCod) {
-      // Cash on delivery: paid only after the order is delivered.
-      if (isDelivered) {
-        label = 'PAID';
-        bgColor = Colors.green.withAlpha(30);
-        textColor = Colors.green;
-      } else {
-        label = 'UNPAID';
-        bgColor = Colors.red.withAlpha(30);
-        textColor = Colors.red;
-      }
-    } else if (firestorePaid) {
+      label = 'COD';
+      bgColor = Colors.orange.withAlpha(30);
+      textColor = Colors.orange;
+    } else if (isPaid) {
       label = 'PAID';
       bgColor = Colors.green.withAlpha(30);
       textColor = Colors.green;
@@ -421,49 +410,34 @@ class CustomerOrdersView extends StatelessWidget {
     );
   }
 
-  /// Customer-facing status: COD shows awaiting payment until delivered; online
-  /// (card/checkout) shows pending until delivered, then delivered.
-  Widget _buildStatusChip(
-    ThemeData theme,
-    Map<String, dynamic> order,
-    String status,
-  ) {
-    final paymentMethod = order['paymentMethod'] as String? ?? 'cod';
-    final paymentStatus = order['paymentStatus'] as String? ?? 'pending';
-    final isCod = paymentMethod == 'cod';
-    final isDelivered = status == 'delivered';
-
-    late final String label;
-    late final Color bgColor;
-    late final Color textColor;
-
-    if (isCod) {
-      if (isDelivered) {
-        label = 'DELIVERED';
+  Widget _buildStatusChip(ThemeData theme, String status) {
+    Color bgColor;
+    Color textColor;
+    switch (status) {
+      case 'pending':
+        bgColor = Colors.orange.withAlpha(30);
+        textColor = Colors.orange;
+      case 'accepted':
+        bgColor = Colors.blue.withAlpha(30);
+        textColor = Colors.blue;
+      case 'in_kitchen':
+        bgColor = Colors.indigo.withAlpha(30);
+        textColor = Colors.indigo;
+      case 'handed_to_rider':
+        bgColor = Colors.purple.withAlpha(30);
+        textColor = Colors.purple;
+      case 'on_the_way':
+        bgColor = Colors.teal.withAlpha(30);
+        textColor = Colors.teal;
+      case 'delivered':
         bgColor = Colors.green.withAlpha(30);
         textColor = Colors.green;
-      } else {
-        label = 'AWAITING PAYMENT';
+      default:
         bgColor = theme.colorScheme.muted;
         textColor = theme.colorScheme.mutedForeground;
-      }
-    } else {
-      if (!isDelivered) {
-        if (paymentStatus != 'paid' || status == 'awaiting_payment') {
-          label = 'AWAITING PAYMENT';
-          bgColor = theme.colorScheme.muted;
-          textColor = theme.colorScheme.mutedForeground;
-        } else {
-          label = 'PENDING';
-          bgColor = Colors.orange.withAlpha(30);
-          textColor = Colors.orange;
-        }
-      } else {
-        label = 'DELIVERED';
-        bgColor = Colors.green.withAlpha(30);
-        textColor = Colors.green;
-      }
     }
+
+    final label = _statusDisplayLabels[status] ?? status.toUpperCase();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -472,7 +446,7 @@ class CustomerOrdersView extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
-        label,
+        label.toUpperCase(),
         style: TextStyle(
           color: textColor,
           fontSize: 11,
@@ -480,5 +454,45 @@ class CustomerOrdersView extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  List<Widget> _buildOrderItemPreview(
+    ThemeData theme,
+    Map<String, dynamic> order,
+  ) {
+    final raw = order['items'];
+    if (raw is! List || raw.isEmpty) {
+      return const [];
+    }
+    final out = <Widget>[const SizedBox(height: 8)];
+    final maxItems = raw.length > 3 ? 3 : raw.length;
+    for (var i = 0; i < maxItems; i++) {
+      final itemRaw = raw[i];
+      if (itemRaw is! Map) {
+        continue;
+      }
+      final item = Map<String, dynamic>.from(itemRaw);
+      final name = (item['name'] ?? 'Item').toString().trim();
+      final qRaw = item['quantity'];
+      var qty = 1;
+      if (qRaw is num) {
+        qty = qRaw.toInt().clamp(1, 999);
+      }
+      final note = (item['note'] ?? '').toString().trim();
+      out.add(
+        Text('$qty x $name').muted().xSmall(),
+      );
+      if (note.isNotEmpty) {
+        out.add(
+          Text('Customisation: $note').muted().xSmall(),
+        );
+      }
+    }
+    if (raw.length > maxItems) {
+      out.add(
+        Text('...and ${raw.length - maxItems} more').muted().xSmall(),
+      );
+    }
+    return out;
   }
 }

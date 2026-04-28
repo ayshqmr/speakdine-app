@@ -1,25 +1,39 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:speak_dine/config/api_keys.dart';
-import 'package:speak_dine/services/cart_service.dart';
 
-import 'package:speak_dine/services/stripe_checkout_url_stub.dart'
-    if (dart.library.html) 'package:speak_dine/services/stripe_checkout_url_web.dart'
-    as stripe_checkout_url;
-
-String? _getAppBaseUrl() {
-  if (!kIsWeb) return null;
-  try {
-    return Uri.base.origin;
-  } catch (_) {
-    return null;
+Future<void> _openUrl(Uri uri) async {
+  if (kIsWeb) {
+    await launchUrl(uri, webOnlyWindowName: '_self');
+  } else {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
+}
+
+const _webFallbackUrl = 'https://speakdine-8f4e9.web.app';
+const _mobileDeepLinkBase = 'speakdine://callback';
+
+String _getAppBaseUrl() {
+  if (kIsWeb) {
+    try {
+      return Uri.base.origin;
+    } catch (_) {
+      return _webFallbackUrl;
+    }
+  }
+  return _webFallbackUrl;
+}
+
+String _getConnectReturnUrl() {
+  if (kIsWeb) {
+    return _getAppBaseUrl();
+  }
+  return _mobileDeepLinkBase;
 }
 
 class SavedCard {
@@ -41,197 +55,6 @@ class SavedCard {
 class PaymentService {
   static final _firestore = FirebaseFirestore.instance;
 
-  /// After Stripe Checkout redirects back to the app (web), verify payment and
-  /// mark Firestore orders as paid. Safe to call on every launch; no-ops if no
-  /// `session_id` in the URL.
-  static Future<void> handleStripeCheckoutReturnIfPresent() async {
-    if (!kIsWeb) return;
-    if (stripeServerUrl.trim().isEmpty) return;
-
-    final uri = Uri.base;
-    final sessionId = uri.queryParameters['session_id']?.trim();
-    if (sessionId == null || sessionId.isEmpty) return;
-    if (uri.queryParameters['stripe_checkout'] != '1') return;
-
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      try {
-        await FirebaseAuth.instance
-            .authStateChanges()
-            .where((u) => u != null)
-            .first
-            .timeout(const Duration(seconds: 5));
-      } catch (_) {}
-      user = FirebaseAuth.instance.currentUser;
-    }
-    if (user == null) {
-      for (var i = 0; i < 40; i++) {
-        user = FirebaseAuth.instance.currentUser;
-        if (user != null) break;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      }
-    }
-
-    final userFinal = user;
-    if (userFinal == null) {
-      debugPrint('[PaymentService] Checkout return: no signed-in user');
-      stripe_checkout_url.clearStripeCheckoutQueryFromBrowserUrl();
-      return;
-    }
-
-    final result = await _post('/verify-checkout-session', {
-      'sessionId': sessionId,
-    });
-
-    void clearCheckoutUrl() {
-      stripe_checkout_url.clearStripeCheckoutQueryFromBrowserUrl();
-    }
-
-    if (result == null || result['paid'] != true) {
-      debugPrint('[PaymentService] Checkout verify: not paid or failed');
-      clearCheckoutUrl();
-      return;
-    }
-
-    final orderId = result['orderId'] as String?;
-    final metaUid = result['firebaseUid'] as String?;
-    if (orderId == null || orderId.isEmpty) {
-      debugPrint('[PaymentService] Checkout verify: missing orderId in session');
-      clearCheckoutUrl();
-      return;
-    }
-
-    if (metaUid != null && metaUid.isNotEmpty && metaUid != userFinal.uid) {
-      debugPrint('[PaymentService] Checkout verify: order belongs to another user');
-      clearCheckoutUrl();
-      return;
-    }
-
-    final custRef = _firestore
-        .collection('users')
-        .doc(userFinal.uid)
-        .collection('orders')
-        .doc(orderId);
-    final txRef =
-        _firestore.collection('transactions').doc('checkout_$orderId');
-    final existingTx = await txRef.get();
-    if (existingTx.exists) {
-      debugPrint('[PaymentService] Checkout already recorded for $orderId');
-      clearCheckoutUrl();
-      return;
-    }
-
-    final snap = await custRef.get();
-    if (!snap.exists) {
-      debugPrint('[PaymentService] Checkout verify: customer order not found');
-      clearCheckoutUrl();
-      return;
-    }
-
-    final data = snap.data()!;
-    final rid = data['restaurantId'] as String?;
-    final roid = data['restaurantOrderId'] as String?;
-
-    final patch = <String, dynamic>{
-      'paymentStatus': 'paid',
-      'status': 'pending',
-    };
-
-    final checkoutKind = result['checkoutKind'] as String? ?? 'standard';
-    final isConnect = checkoutKind == 'connect';
-    final totalPkr = (data['total'] as num?)?.toDouble() ?? 0.0;
-    final restaurantName = data['restaurantName'] as String? ?? 'Restaurant';
-
-    var platformFeePkr = totalPkr * 0.05;
-    var restaurantAmountPkr = totalPkr - platformFeePkr;
-    var debtRecoveredPkr = 0.0;
-    var debtRemaining = 0.0;
-
-    if (isConnect) {
-      final nfp = (result['normalFeePaisa'] as num?)?.toInt() ?? 0;
-      final drp = (result['debtRecoveredPaisa'] as num?)?.toInt() ?? 0;
-      final rap = (result['restaurantAmountPaisa'] as num?)?.toInt() ?? 0;
-      platformFeePkr = nfp / 100.0;
-      debtRecoveredPkr = drp / 100.0;
-      restaurantAmountPkr = rap / 100.0;
-      if (debtRecoveredPkr > 0 &&
-          rid != null &&
-          rid.isNotEmpty) {
-        final debtSnap =
-            await _firestore.collection('platformDebts').doc(rid).get();
-        final currentDebt =
-            (debtSnap.data()?['amount'] as num?)?.toDouble() ?? 0.0;
-        debtRemaining = currentDebt - debtRecoveredPkr;
-        if (debtRemaining < 0) debtRemaining = 0;
-      }
-    }
-
-    var customerName = 'Customer';
-    final dn = userFinal.displayName?.trim();
-    if (dn != null && dn.isNotEmpty) {
-      customerName = dn;
-    } else {
-      final em = userFinal.email?.trim();
-      if (em != null && em.isNotEmpty) customerName = em;
-    }
-
-    final txData = <String, dynamic>{
-      'customerId': userFinal.uid,
-      'customerName': customerName,
-      'restaurantId': rid ?? '',
-      'restaurantName': restaurantName,
-      'orderId': orderId,
-      'amount': totalPkr,
-      'platformFee': platformFeePkr,
-      'restaurantAmount': restaurantAmountPkr,
-      'paymentMethod': 'online',
-      'createdAt': FieldValue.serverTimestamp(),
-      'stripeCheckoutSessionId': sessionId,
-    };
-    if (debtRecoveredPkr > 0) {
-      txData['debtRecovered'] = debtRecoveredPkr;
-      txData['debtRemaining'] = debtRemaining;
-    }
-
-    final batch = _firestore.batch();
-    batch.update(custRef, patch);
-    if (rid != null && roid != null && rid.isNotEmpty && roid.isNotEmpty) {
-      batch.update(
-        _firestore
-            .collection('restaurants')
-            .doc(rid)
-            .collection('orders')
-            .doc(roid),
-        patch,
-      );
-    }
-    batch.set(txRef, txData);
-    if (isConnect && debtRecoveredPkr > 0 && rid != null && rid.isNotEmpty) {
-      batch.set(
-        _firestore.collection('platformDebts').doc(rid),
-        {'amount': FieldValue.increment(-debtRecoveredPkr)},
-        SetOptions(merge: true),
-      );
-    }
-
-    try {
-      await batch.commit();
-    } catch (e) {
-      debugPrint('[PaymentService] Checkout finalize batch failed: $e');
-      clearCheckoutUrl();
-      return;
-    }
-
-    // Hosted Checkout uses `launchUrl` with `_self`, so the app unloads before
-    // CartView can run `clearCart()`. Clear persisted cart on successful return.
-    cartService.clearCart();
-
-    clearCheckoutUrl();
-    debugPrint(
-      '[PaymentService] Checkout verified; orders + transaction for $orderId',
-    );
-  }
-
   static Future<Map<String, dynamic>?> _post(
       String path, Map<String, dynamic> body) async {
     try {
@@ -242,9 +65,7 @@ class PaymentService {
       );
 
       if (response.statusCode != 200) {
-        debugPrint(
-          '[PaymentService] $path failed: HTTP ${response.statusCode} ${response.body}',
-        );
+        debugPrint('[PaymentService] $path failed: ${response.body}');
         return null;
       }
 
@@ -291,7 +112,6 @@ class PaymentService {
     required String? stripeCustomerId,
     required List<Map<String, dynamic>> items,
     required String orderId,
-    required String firebaseUid,
   }) async {
     final lineItems = items.map((item) => {
           'name': item['name'] as String? ?? 'Item',
@@ -304,7 +124,6 @@ class PaymentService {
       'items': lineItems,
       'orderId': orderId,
       'currency': 'pkr',
-      'firebaseUid': firebaseUid,
     };
     final appUrl = _getAppBaseUrl();
     if (appUrl != null) body['appBaseUrl'] = appUrl;
@@ -317,10 +136,7 @@ class PaymentService {
     final sessionId = result['sessionId'] as String?;
 
     if (url != null) {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, webOnlyWindowName: '_self');
-      }
+      await _openUrl(Uri.parse(url));
     }
 
     return sessionId;
@@ -342,11 +158,8 @@ class PaymentService {
 
     final url = result['url'] as String?;
     if (url != null) {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, webOnlyWindowName: '_self');
-        return true;
-      }
+      await _openUrl(Uri.parse(url));
+      return true;
     }
 
     return false;
@@ -416,8 +229,7 @@ class PaymentService {
       'email': email,
       'businessName': businessName,
     };
-    final appUrl = _getAppBaseUrl();
-    if (appUrl != null) body['appBaseUrl'] = appUrl;
+    body['appBaseUrl'] = _getConnectReturnUrl();
 
     final result = await _post('/create-connect-account', body);
     if (result == null) return null;
@@ -439,8 +251,7 @@ class PaymentService {
     required String accountId,
   }) async {
     final body = <String, dynamic>{'accountId': accountId};
-    final appUrl = _getAppBaseUrl();
-    if (appUrl != null) body['appBaseUrl'] = appUrl;
+    body['appBaseUrl'] = _getConnectReturnUrl();
 
     final result = await _post('/connect-onboarding-link', body);
     return result?['onboardingUrl'] as String?;
@@ -469,6 +280,14 @@ class PaymentService {
     return isReady;
   }
 
+  /// Verifies whether a Stripe Checkout session has been paid.
+  static Future<bool> verifyCheckoutSession(String sessionId) async {
+    final result = await _post('/verify-checkout-session', {
+      'sessionId': sessionId,
+    });
+    return result?['paid'] == true;
+  }
+
   /// Creates a checkout session with split payment (5% platform fee + COD debt recovery).
   /// Returns a [ConnectedPaymentResult] with session ID and debt recovery breakdown, or null on failure.
   static Future<ConnectedPaymentResult?> openConnectedCheckout({
@@ -476,7 +295,6 @@ class PaymentService {
     required List<Map<String, dynamic>> items,
     required String orderId,
     required String connectedAccountId,
-    required String firebaseUid,
     int platformDebtPaisa = 0,
   }) async {
     final lineItems = items.map((item) => {
@@ -492,7 +310,6 @@ class PaymentService {
       'currency': 'pkr',
       'connectedAccountId': connectedAccountId,
       'platformDebtPaisa': platformDebtPaisa,
-      'firebaseUid': firebaseUid,
     };
     final appUrl = _getAppBaseUrl();
     if (appUrl != null) body['appBaseUrl'] = appUrl;
@@ -504,10 +321,7 @@ class PaymentService {
     final sessionId = result['sessionId'] as String?;
 
     if (url != null) {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, webOnlyWindowName: '_self');
-      }
+      await _openUrl(Uri.parse(url));
     }
 
     return ConnectedPaymentResult(

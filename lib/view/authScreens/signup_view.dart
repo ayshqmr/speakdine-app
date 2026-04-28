@@ -6,20 +6,18 @@ import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:speak_dine/utils/customer_username_validation.dart';
 import 'package:speak_dine/utils/password_strength.dart';
+import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
 import 'package:speak_dine/utils/toast_helper.dart';
 import 'package:speak_dine/widgets/auth_labeled_text_field.dart';
 import 'package:speak_dine/widgets/password_strength_indicator.dart';
-import 'package:speak_dine/widgets/sd_lib_restaurant_category_picker.dart';
-import 'package:speak_dine/services/email_verification_service.dart';
+import 'package:speak_dine/services/cart_service.dart';
+import 'package:speak_dine/services/google_auth_service.dart';
+import 'package:speak_dine/view/home/customer_shell.dart';
+import 'package:speak_dine/view/home/restaurant_shell.dart';
+import 'package:speak_dine/utils/google_sign_in_guard.dart';
 import 'package:speak_dine/services/login_lookup_sync.dart';
+import 'package:speak_dine/widgets/google_logo_mark.dart';
 import 'package:speak_dine/widgets/keyboard_friendly.dart';
-// Google sign-in (disabled): uncomment these + [_routeByRole]/[_handleGoogleSignUp] + UI after Register.
-// import 'package:speak_dine/services/cart_service.dart';
-// import 'package:speak_dine/view/home/customer_shell.dart';
-// import 'package:speak_dine/view/home/restaurant_shell.dart';
-// import 'package:speak_dine/services/google_auth_service.dart';
-// import 'package:speak_dine/utils/google_sign_in_guard.dart';
-// import 'package:speak_dine/widgets/google_logo_mark.dart';
 
 enum AccountRole { customer, restaurant }
 
@@ -34,14 +32,15 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  /// Shown after Firebase redirects from the verification link (see [web/email_verified.html]).
+  static const String _emailVerificationContinueUrl =
+      'https://speakdine-8f4e9.web.app/email_verified.html';
+
   AccountRole _selectedRole = AccountRole.customer;
   bool _loading = false;
   bool _awaitingEmailVerification = false;
   bool _emailVerifiedDetected = false;
   Timer? _emailVerificationPollTimer;
-  Timer? _resendCooldownTimer;
-  int _signupResendCooldownSec = 0;
-  bool _resendVerificationBusy = false;
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -65,7 +64,6 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopEmailVerificationPolling();
-    _resendCooldownTimer?.cancel();
     _nameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
@@ -172,40 +170,19 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
     }
   }
 
-  void _startSignupResendCooldown() {
-    _resendCooldownTimer?.cancel();
-    setState(() => _signupResendCooldownSec = 60);
-    _resendCooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {
-        _signupResendCooldownSec--;
-        if (_signupResendCooldownSec <= 0) _resendCooldownTimer?.cancel();
-      });
-    });
-  }
-
-  Future<void> _resendSignupVerificationEmail() async {
-    if (_signupResendCooldownSec > 0 || _resendVerificationBusy) return;
-    final user = _auth.currentUser;
-    if (user == null) {
-      _showMessage('Session expired. Use Back to login and try again.');
-      return;
-    }
-    setState(() => _resendVerificationBusy = true);
+  /// Sends verification mail; prefers custom continue URL, then Firebase default.
+  Future<void> _sendSignupVerificationEmail(User user) async {
     try {
-      await EmailVerificationService.sendVerificationEmail(user);
-      _showMessage('Verification email sent again. Check inbox and spam.');
-      _startSignupResendCooldown();
-    } on FirebaseAuthException catch (e) {
-      var msg = 'Could not resend. Try again in a few minutes.';
-      if (e.code == 'too-many-requests') {
-        msg = 'Too many requests. Wait a few minutes, then try Resend again.';
-      }
-      _showMessage(msg);
+      await user.sendEmailVerification(
+        ActionCodeSettings(
+          url: _emailVerificationContinueUrl,
+          handleCodeInApp: false,
+          androidPackageName: 'com.example.speak_dine',
+          androidMinimumVersion: '1',
+        ),
+      );
     } catch (_) {
-      _showMessage('Could not resend the email. Try again later.');
-    } finally {
-      if (mounted) setState(() => _resendVerificationBusy = false);
+      await user.sendEmailVerification();
     }
   }
 
@@ -272,7 +249,7 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
       // If we create the Auth user but cannot send verification, roll back so the user
       // can retry — otherwise the next attempt hits email-already-in-use and looks "wrong".
       try {
-        await EmailVerificationService.sendVerificationEmail(user);
+        await _sendSignupVerificationEmail(user);
       } on FirebaseAuthException catch (e) {
         await _deleteRollbackUser(user);
         var message =
@@ -294,28 +271,24 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
         return;
       }
 
-      // Web: removing TextFields while one is focused triggers
-      // "DOM element of this text editing strategy is not currently active".
-      FocusManager.instance.primaryFocus?.unfocus();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() {
-          _awaitingEmailVerification = true;
-          _emailVerifiedDetected = false;
-        });
-        _startEmailVerificationPolling();
-        _showMessage(
-          'Verification email sent. Open the link, then tap Open Speak Dine on the web page.',
-        );
+      if (!mounted) return;
+      setState(() {
+        _awaitingEmailVerification = true;
+        _emailVerifiedDetected = false;
       });
+      _startEmailVerificationPolling();
+      _showMessage(
+        'Verification email sent. Open the link, then tap Open Speak Dine on the web page.',
+      );
     } on FirebaseAuthException catch (e) {
       String message = 'Unable to create account. Please try again.';
       if (e.code == 'weak-password') {
         message = 'Password is too weak. Please use a stronger one.';
       } else if (e.code == 'email-already-in-use') {
         message =
-            'This email is already registered. Try logging in: if your email is not verified yet, '
-            'you can resend the verification email from the login screen.';
+            'This email is already registered in Firebase. Try logging in instead. '
+            'If a previous sign-up showed an error before you verified your email, the account '
+            'may still exist—use Forgot password on the login screen, or sign in with Google if you used that.';
       } else if (e.code == 'invalid-email') {
         message = 'Please enter a valid email address.';
       }
@@ -335,8 +308,6 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
     showAppToast(context, message);
   }
 
-  /*
-  // GOOGLE_SIGN_IN_DISABLED — uncomment imports at top + this block + Register-button UI block.
   Future<void> _routeByRole(String uid) async {
     final restaurantDoc =
         await _firestore.collection('restaurants').doc(uid).get();
@@ -385,6 +356,7 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
         return;
       }
 
+      // If Google didn't mark email as verified for some reason, block navigation.
       if (!user.emailVerified) {
         _showMessage('Please verify your email before logging in.');
         await _auth.signOut();
@@ -398,7 +370,6 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
       if (mounted) setState(() => _loading = false);
     }
   }
-  */
 
   Future<void> _completeSignupAfterEmailVerification() async {
     setState(() => _loading = true);
@@ -627,41 +598,12 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
                     ),
                   ),
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlineButton(
-              onPressed: (_signupResendCooldownSec > 0 ||
-                      _resendVerificationBusy)
-                  ? null
-                  : _resendSignupVerificationEmail,
-              child: _resendVerificationBusy
-                  ? SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: theme.colorScheme.primary,
-                      ),
-                    )
-                  : Text(
-                      _signupResendCooldownSec > 0
-                          ? 'Resend email in ${_signupResendCooldownSec}s'
-                          : 'Resend verification email',
-                      style: TextStyle(
-                        color: pink,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-            ),
-          ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: OutlineButton(
               onPressed: () async {
                 _stopEmailVerificationPolling();
-                _resendCooldownTimer?.cancel();
                 await _auth.signOut();
                 if (!mounted) return;
                 Navigator.pop(context);
@@ -777,7 +719,7 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
                         AuthLabeledTextField(
                           label: 'Email',
                           controller: _emailController,
-                          placeholder: 'you@example.com',
+                          placeholder: 'You@google.com',
                         ),
                         AuthLabeledTextField(
                           label: 'Phone',
@@ -799,11 +741,45 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
                           ),
                         if (isRestaurant) ...[
                           const SizedBox(height: 16),
-                          SdLibRestaurantCategoryPicker(
-                            theme: theme,
-                            selectedId: _restaurantCategoryId,
-                            onChanged: (id) =>
-                                setState(() => _restaurantCategoryId = id),
+                          Text(
+                            'Restaurant category',
+                            style: TextStyle(
+                              color: theme.colorScheme.foreground,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Pick one venue type (e.g. Desi, Fast Food). Menu dishes do not need their own category.',
+                            style: TextStyle(
+                              color: theme.colorScheme.mutedForeground,
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Select<String>(
+                            value: _restaurantCategoryId,
+                            onChanged: (value) =>
+                                setState(() => _restaurantCategoryId = value),
+                            itemBuilder: (context, item) {
+                              final label = sdLibRestaurantCategoryLabel(item) ?? item;
+                              return Text(label);
+                            },
+                            placeholder: const Text('Select category'),
+                            popupConstraints: const BoxConstraints(maxHeight: 240),
+                            popup: SelectPopup(
+                              items: SelectItemList(
+                                children: kSdLibRestaurantCategories
+                                    .map(
+                                      (c) => SelectItemButton(
+                                        value: c.id,
+                                        child: Text(c.label),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ),
                           ),
                         ],
                         AuthLabeledTextField(
@@ -843,57 +819,54 @@ class _SignupViewState extends State<SignupView> with WidgetsBindingObserver {
                                   ],
                                 ),
                               ),
-                      /*
-                      // GOOGLE_SIGN_IN_DISABLED — uncomment with imports + [_handleGoogleSignUp].
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Divider(
-                              height: 1,
-                              thickness: 1,
-                            ),
-                          ),
-                          Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text(
-                              'or sign up with',
-                              style: TextStyle(
-                                color: theme.colorScheme.primary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Divider(
+                                height: 1,
+                                thickness: 1,
                               ),
                             ),
-                          ),
-                          const Expanded(
-                            child: Divider(
-                              height: 1,
-                              thickness: 1,
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text(
+                                'or sign up with',
+                                style: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      OutlineButton(
-                        onPressed: _loading ? null : _handleGoogleSignUp,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const GoogleLogoMark(size: 20),
-                            const SizedBox(width: 10),
-                            Text(
-                              'Continue with Google',
-                              style: TextStyle(
-                                color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
+                            const Expanded(
+                              child: Divider(
+                                height: 1,
+                                thickness: 1,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      */
+                        const SizedBox(height: 12),
+                        OutlineButton(
+                          onPressed: _loading ? null : _handleGoogleSignUp,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const GoogleLogoMark(size: 20),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Continue with Google',
+                                style: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),

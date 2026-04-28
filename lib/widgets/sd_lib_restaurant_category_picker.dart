@@ -1,7 +1,8 @@
+import 'package:flutter/material.dart' as material;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:speak_dine/constants/sd_lib_restaurant_categories.dart';
 
-/// SD-lib single-select chips for restaurant type (`restaurantCategory` in Firestore).
+/// SD-lib single-select dropdown for restaurant type (`restaurantCategory` in Firestore).
 class SdLibRestaurantCategoryPicker extends StatelessWidget {
   const SdLibRestaurantCategoryPicker({
     super.key,
@@ -18,6 +19,21 @@ class SdLibRestaurantCategoryPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final m = material.Theme.of(context);
+    final knownIds = kSdLibRestaurantCategories.map((c) => c.id).toSet();
+    final effectiveValue =
+        selectedId != null && knownIds.contains(selectedId) ? selectedId : null;
+    final hintStyle = TextStyle(
+      color: theme.colorScheme.foreground.withValues(alpha: 0.62),
+      fontSize: dense ? 13 : 14,
+      fontWeight: FontWeight.w500,
+    );
+    final itemStyle = TextStyle(
+      color: theme.colorScheme.foreground,
+      fontSize: dense ? 13 : 15,
+      fontWeight: FontWeight.w600,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -38,44 +54,50 @@ class SdLibRestaurantCategoryPicker extends StatelessWidget {
           ),
         ),
         SizedBox(height: dense ? 8 : 10),
-        Wrap(
-          spacing: dense ? 6 : 8,
-          runSpacing: dense ? 6 : 8,
-          children: kSdLibRestaurantCategories.map((c) {
-            final selected = selectedId == c.id;
-            return GestureDetector(
-              onTap: () => onChanged(c.id),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: EdgeInsets.symmetric(
-                  horizontal: dense ? 8 : 10,
-                  vertical: dense ? 6 : 8,
-                ),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? theme.colorScheme.primary.withValues(alpha: 0.15)
-                      : theme.colorScheme.muted,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: selected
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.border.withValues(alpha: 0.4),
-                    width: selected ? 1.5 : 1,
-                  ),
-                ),
-                child: Text(
-                  c.label,
-                  style: TextStyle(
-                    fontSize: dense ? 10 : 11,
-                    fontWeight: FontWeight.w600,
-                    color: selected
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.mutedForeground,
-                  ),
-                ),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.muted,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: theme.colorScheme.primary.withValues(alpha: 0.28),
+              width: 1,
+            ),
+          ),
+          padding: EdgeInsets.symmetric(
+            horizontal: dense ? 10 : 12,
+            vertical: dense ? 2 : 4,
+          ),
+          child: material.DropdownButtonHideUnderline(
+            child: material.DropdownButton<String>(
+              value: effectiveValue,
+              hint: Text('Select a category', style: hintStyle),
+              isExpanded: true,
+              padding: EdgeInsets.zero,
+              icon: Icon(
+                RadixIcons.chevronDown,
+                size: dense ? 20 : 22,
+                color: theme.colorScheme.primary,
               ),
-            );
-          }).toList(),
+              style: itemStyle,
+              dropdownColor: m.colorScheme.surface,
+              borderRadius: BorderRadius.circular(10),
+              items: kSdLibRestaurantCategories
+                  .map(
+                    (c) => material.DropdownMenuItem<String>(
+                      value: c.id,
+                      child: Text(
+                        c.label,
+                        style: itemStyle.copyWith(fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (id) {
+                if (id != null) onChanged(id);
+              },
+            ),
+          ),
         ),
       ],
     );

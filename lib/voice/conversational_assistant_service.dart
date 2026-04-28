@@ -188,6 +188,14 @@ $text
         return VoiceIntentKind.openCartIntent;
       case 'cartNaturalLanguageEdit':
         return VoiceIntentKind.cartNaturalLanguageEdit;
+      case 'customizeCartItem':
+        return VoiceIntentKind.customizeCartItem;
+      case 'provideCustomizationNote':
+        return VoiceIntentKind.provideCustomizationNote;
+      case 'removeCartItemCustomization':
+        return VoiceIntentKind.removeCartItemCustomization;
+      case 'listCartItemsIntent':
+        return VoiceIntentKind.listCartItemsIntent;
       case 'initiateCheckout':
         return VoiceIntentKind.initiateCheckout;
       case 'confirmOrderUIOnly':
